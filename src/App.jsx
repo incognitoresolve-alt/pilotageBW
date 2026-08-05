@@ -26,11 +26,12 @@ const formatEUR = (n) =>
 
 const emptyFigures = () => ({ assurance: 0, PAT: 0, OCA: 0, BPR: 0, MP7: 0, AUG: 0, DIM: 0 });
 
-async function loadShared(key, fallback) {
+async function loadShared(key, fallback, onError) {
   try {
     const r = await window.storage.get(key, true);
     return r ? JSON.parse(r.value) : fallback;
-  } catch {
+  } catch (e) {
+    onError?.(e);
     return fallback;
   }
 }
@@ -64,12 +65,21 @@ export default function App() {
 
   const mKey = monthKey();
 
+  const notify = useCallback((msg, isError = false) => {
+    setToast({ msg, isError });
+    setTimeout(() => setToast(null), 2600);
+  }, []);
+
   useEffect(() => {
     (async () => {
+      let loadError = null;
+      const onError = (e) => {
+        loadError = e;
+      };
       const [m, e, f, lastSession] = await Promise.all([
-        loadShared("members", []),
-        loadShared("entries", []),
-        loadShared("figures", {}),
+        loadShared("members", [], onError),
+        loadShared("entries", [], onError),
+        loadShared("figures", {}, onError),
         loadLocal("last-session", null),
       ]);
       setMembers(m);
@@ -79,12 +89,10 @@ export default function App() {
         setSession(lastSession);
       }
       setReady(true);
+      if (loadError) {
+        notify(`Chargement des données impossible (${loadError.message}) — les chiffres affichés peuvent être incomplets.`, true);
+      }
     })();
-  }, []);
-
-  const notify = useCallback((msg, isError = false) => {
-    setToast({ msg, isError });
-    setTimeout(() => setToast(null), 2600);
   }, []);
 
   // Chaque fonction renvoie true si la sauvegarde a réussi, false sinon —
@@ -101,7 +109,7 @@ export default function App() {
     } catch (e) {
       console.error("storage set failed", "members", e);
       setMembers(previous);
-      notify("Échec de la sauvegarde en ligne — vérifiez votre connexion et réessayez.", true);
+      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
       return false;
     }
   };
@@ -114,7 +122,7 @@ export default function App() {
     } catch (e) {
       console.error("storage set failed", "entries", e);
       setEntries(previous);
-      notify("Échec de la sauvegarde en ligne — vérifiez votre connexion et réessayez.", true);
+      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
       return false;
     }
   };
@@ -127,7 +135,7 @@ export default function App() {
     } catch (e) {
       console.error("storage set failed", "figures", e);
       setFigures(previous);
-      notify("Échec de la sauvegarde en ligne — vérifiez votre connexion et réessayez.", true);
+      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
       return false;
     }
   };
