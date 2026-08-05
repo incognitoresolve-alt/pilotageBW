@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Shield, CreditCard, Users, LogOut, Plus, Trash2, CheckCircle2,
-  Calendar, Settings, ChevronRight, Lock, TrendingUp, ClipboardList,
-  AlertCircle, Award, X, Download, Euro, History
+  Calendar, Settings, ChevronRight, ChevronLeft, Lock, TrendingUp, ClipboardList,
+  AlertCircle, Award, X, Download, Euro, History, RotateCcw, Pencil
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -23,6 +23,14 @@ const daysLeftInMonth = () => {
 };
 const monthLabel = () =>
   new Date().toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+const monthKeyLabel = (key) => {
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("fr-FR", { month: "long", year: "numeric" });
+};
+const shiftMonthKey = (key, delta) => {
+  const [y, m] = key.split("-").map(Number);
+  return monthKey(new Date(y, m - 1 + delta, 1));
+};
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
@@ -32,6 +40,13 @@ const formatEUR = (n) =>
 const creditLabel = (e) => `Crédit ${e.creditType}${e.contractMode ? ` (${e.contractMode})` : ""}`;
 
 const emptyFigures = () => ({ assurance: 0, PAT: 0, OCA: 0, BPR: 0, MP7: 0, AUG: 0, DIM: 0 });
+
+// Objectifs par produit (optionnels, en plus des objectifs globaux) :
+// nombre pour les types d'assurance, montant € pour les types de crédit.
+const emptyObjByType = () => ({
+  assurance: Object.fromEntries(ASSURANCE_TYPES.map((t) => [t, 0])),
+  credit: Object.fromEntries(CREDIT_TYPES.map((t) => [t, 0])),
+});
 
 async function loadShared(key, fallback, onError) {
   try {
@@ -170,6 +185,27 @@ export default function App() {
       ...deletionHistory,
     ]);
 
+  // Réinsère l'élément supprimé (membre ou dossier) et marque l'entrée de
+  // l'historique comme restaurée, sans la faire disparaître (garde la trace).
+  const restoreDeletion = async (item) => {
+    let ok;
+    if (item.kind === "member") {
+      ok = await persistMembers([item.data, ...members]);
+    } else if (item.kind === "entry") {
+      ok = await persistEntries([item.data, ...entries]);
+    } else {
+      return;
+    }
+    if (ok) {
+      const okHist = await persistDeletionHistory(
+        deletionHistory.map((h) =>
+          h.id === item.id ? { ...h, restored: true, restoredAt: new Date().toISOString() } : h
+        )
+      );
+      if (okHist) notify("Élément restauré.");
+    }
+  };
+
   const login = async (member) => {
     setSession(member);
     await saveLocal("last-session", member);
@@ -230,6 +266,7 @@ export default function App() {
           setFigures={persistFigures}
           deletionHistory={deletionHistory}
           recordDeletion={recordDeletion}
+          restoreDeletion={restoreDeletion}
           tab={tab}
           setTab={setTab}
           mKey={mKey}
@@ -433,7 +470,7 @@ function Field({ label, children }) {
 }
 
 /* ---------------- MAIN APP ---------------- */
-function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, setFigures, deletionHistory, recordDeletion, tab, setTab, mKey, notify }) {
+function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, setFigures, deletionHistory, recordDeletion, restoreDeletion, tab, setTab, mKey, notify }) {
   const isManager = session.role === "responsable";
   const accent = isManager ? MANAGER_ACCENT : THEME.teal;
   const accentSoft = isManager ? MANAGER_ACCENT_SOFT : THEME.tealSoft;
@@ -525,7 +562,7 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
           <EquipeTab members={members} setMembers={setMembers} recordDeletion={recordDeletion} session={session} notify={notify} />
         )}
         {tab === "historique" && isManager && (
-          <HistoriqueTab deletionHistory={deletionHistory} />
+          <HistoriqueTab deletionHistory={deletionHistory} restoreDeletion={restoreDeletion} />
         )}
       </main>
     </div>
@@ -558,6 +595,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
   const [dossier, setDossier] = useState("");
   const [montant, setMontant] = useState("");
   const [date, setDate] = useState(todayISO());
+  const [editingEntryId, setEditingEntryId] = useState(null);
 
   const needsContractMode = type === "credit" && CONTRACT_MODE_CREDIT_TYPES.includes(creditType);
 
@@ -569,11 +607,34 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
     [entries, session.id, mKey]
   );
 
+  const resetForm = () => {
+    setEditingEntryId(null);
+    setType("assurance");
+    setCreditType("PAT");
+    setContractMode("Papier");
+    setAssuranceType("ALLIN");
+    setQuantite("1");
+    setDossier("");
+    setMontant("");
+    setDate(todayISO());
+  };
+
+  const startEditEntry = (entry) => {
+    setEditingEntryId(entry.id);
+    setType(entry.type);
+    setCreditType(entry.creditType || "PAT");
+    setContractMode(entry.contractMode || "Papier");
+    setAssuranceType(entry.assuranceType || "ALLIN");
+    setQuantite(String(entry.quantite || 1));
+    setDossier(entry.dossier);
+    setMontant(entry.montant ? String(entry.montant) : "");
+    setDate(entry.date);
+  };
+
   const submit = async (e) => {
     e.preventDefault();
     if (!dossier.trim()) return notify("Indiquez le numéro de dossier.");
-    const entry = {
-      id: uid(),
+    const entryData = {
       personId: session.id,
       personName: session.name,
       type,
@@ -584,15 +645,19 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
       dossier: dossier.trim(),
       montant: type === "credit" ? Number(montant) || 0 : 0,
       date,
-      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
-    const ok = await setEntries([entry, ...entries]);
+    const isEditingEntry = !!editingEntryId;
+    const next = isEditingEntry
+      ? entries.map((en) => (en.id === editingEntryId ? { ...en, ...entryData } : en))
+      : [{ id: uid(), createdAt: entryData.updatedAt, ...entryData }, ...entries];
+    const ok = await setEntries(next);
     if (ok) {
-      setDossier("");
-      setMontant("");
-      setQuantite("1");
+      resetForm();
       notify(
-        type === "assurance"
+        isEditingEntry
+          ? "Modifications enregistrées."
+          : type === "assurance"
           ? `Assurance ${assuranceType} enregistrée.`
           : `Crédit ${creditType}${needsContractMode ? ` (${contractMode})` : ""} enregistré.`
       );
@@ -603,6 +668,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
     const entry = entries.find((e) => e.id === id);
     await setEntries(entries.filter((e) => e.id !== id));
     if (entry) await recordDeletion("entry", entry, session);
+    if (editingEntryId === id) resetForm();
   };
 
   const countAssurance = myEntries
@@ -615,7 +681,15 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
     <div className="grid md:grid-cols-2 gap-6">
       <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
         <h2 className="text-sm font-semibold mb-4 flex items-center gap-1.5">
-          <Plus size={15} style={{ color: THEME.teal }} /> Nouvelle vente
+          {editingEntryId ? (
+            <>
+              <Pencil size={15} style={{ color: THEME.teal }} /> Modifier la vente
+            </>
+          ) : (
+            <>
+              <Plus size={15} style={{ color: THEME.teal }} /> Nouvelle vente
+            </>
+          )}
         </h2>
         <form onSubmit={submit} className="space-y-4">
           <div className="grid grid-cols-2 gap-2">
@@ -745,13 +819,25 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
             />
           </Field>
 
-          <button
-            type="submit"
-            className="w-full py-2.5 rounded-lg text-sm font-semibold text-white"
-            style={{ background: THEME.teal }}
-          >
-            Enregistrer
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="submit"
+              className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-white"
+              style={{ background: THEME.teal }}
+            >
+              {editingEntryId ? "Enregistrer les modifications" : "Enregistrer"}
+            </button>
+            {editingEntryId && (
+              <button
+                type="button"
+                onClick={resetForm}
+                className="px-4 py-2.5 rounded-lg text-sm font-medium"
+                style={{ background: THEME.bg, color: THEME.navySoft }}
+              >
+                Annuler
+              </button>
+            )}
+          </div>
         </form>
       </div>
 
@@ -798,10 +884,17 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-3 flex-shrink-0">
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     <span className="font-medium" style={{ color: THEME.navy }}>
                       {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
                     </span>
+                    <button
+                      onClick={() => startEditEntry(e)}
+                      className="p-1.5 rounded-md flex-shrink-0"
+                      aria-label="Modifier"
+                    >
+                      <Pencil size={14} style={{ color: THEME.navySoft }} />
+                    </button>
                     <ConfirmActionButton onConfirm={() => remove(e.id)} label="Supprimer" />
                   </div>
                 </div>
@@ -923,12 +1016,15 @@ function StatCard({ icon: Icon, label, value, color }) {
 /* ---------------- SUIVI TAB ---------------- */
 function SuiviTab({ session, members, setMembers, entries, figures, setFigures, mKey, notify, isManager }) {
   const collaborators = members.filter((m) => m.role === "collaborateur");
-  const monthFigures = figures[mKey] || {};
+  const [viewMonth, setViewMonth] = useState(mKey);
+  const isCurrentMonth = viewMonth === mKey;
+  const monthFigures = figures[viewMonth] || {};
   const daysLeft = daysLeftInMonth();
 
   const [editing, setEditing] = useState(null); // memberId being edited by manager
   const [draft, setDraft] = useState(emptyFigures());
   const [objDraft, setObjDraft] = useState({ objectifAssurance: 0, objectifCredit: 0, objectifMontant: 0 });
+  const [objByTypeDraft, setObjByTypeDraft] = useState(emptyObjByType());
   const [generalObj, setGeneralObj] = useState({ objectifAssurance: 5, objectifCredit: 5, objectifMontant: 5000 });
 
   const applyGeneralObjectives = async () => {
@@ -954,10 +1050,14 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
       objectifCredit: member.objectifCredit ?? 5,
       objectifMontant: member.objectifMontant ?? 5000,
     });
+    setObjByTypeDraft({
+      assurance: { ...emptyObjByType().assurance, ...(member.objectifsAssuranceParType || {}) },
+      credit: { ...emptyObjByType().credit, ...(member.objectifsCreditParType || {}) },
+    });
   };
 
   const saveEdit = async (member) => {
-    const next = { ...figures, [mKey]: { ...monthFigures, [member.id]: draft } };
+    const next = { ...figures, [viewMonth]: { ...monthFigures, [member.id]: draft } };
     const okFigures = await setFigures(next);
     const okMembers = await setMembers(
       members.map((m) =>
@@ -967,6 +1067,8 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
               objectifAssurance: Number(objDraft.objectifAssurance) || 0,
               objectifCredit: Number(objDraft.objectifCredit) || 0,
               objectifMontant: Number(objDraft.objectifMontant) || 0,
+              objectifsAssuranceParType: objByTypeDraft.assurance,
+              objectifsCreditParType: objByTypeDraft.credit,
             }
           : m
       )
@@ -984,7 +1086,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
       const f = monthFigures[m.id] || emptyFigures();
       const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (f[ct] || 0), 0);
       const declared = entries.filter(
-        (e) => e.personId === m.id && e.date.slice(0, 7) === mKey
+        (e) => e.personId === m.id && e.date.slice(0, 7) === viewMonth
       );
       const montantTotal = declared.reduce((s, e) => s + (e.montant || 0), 0);
       return {
@@ -1004,20 +1106,54 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
     ws["!cols"] = Object.keys(rows[0] || {}).map(() => ({ wch: 20 }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Chiffres du mois");
-    XLSX.writeFile(wb, `suivi-commercial-${mKey}.xlsx`);
+    XLSX.writeFile(wb, `suivi-commercial-${viewMonth}.xlsx`);
     notify("Export Excel généré.");
   };
 
   return (
     <div className="space-y-5">
       <div className="rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap" style={{ background: THEME.navy, color: "#fff" }}>
-        <div className="flex items-center gap-3">
-          <Calendar size={18} style={{ color: THEME.teal }} />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setViewMonth((v) => shiftMonthKey(v, -1))}
+            aria-label="Mois précédent"
+            className="p-1.5 rounded-lg"
+            style={{ background: "rgba(255,255,255,0.12)" }}
+          >
+            <ChevronLeft size={15} />
+          </button>
+          <Calendar size={18} style={{ color: isCurrentMonth ? THEME.teal : "rgba(255,255,255,0.6)" }} />
           <div className="text-sm">
-            <span className="font-semibold">{daysLeft}</span> jour{daysLeft > 1 ? "s" : ""} restant{daysLeft > 1 ? "s" : ""} avant la fin du mois
-            {" — "}
-            <span className="capitalize">{monthLabel()}</span>
+            {isCurrentMonth && (
+              <>
+                <span className="font-semibold">{daysLeft}</span> jour{daysLeft > 1 ? "s" : ""} restant{daysLeft > 1 ? "s" : ""} avant la fin du mois{" — "}
+              </>
+            )}
+            <span className="capitalize">{monthKeyLabel(viewMonth)}</span>
+            {!isCurrentMonth && (
+              <span className="text-xs ml-2" style={{ color: "rgba(255,255,255,0.6)" }}>
+                (archivé)
+              </span>
+            )}
           </div>
+          <button
+            onClick={() => setViewMonth((v) => shiftMonthKey(v, 1))}
+            disabled={isCurrentMonth}
+            aria-label="Mois suivant"
+            className="p-1.5 rounded-lg"
+            style={{ background: "rgba(255,255,255,0.12)", opacity: isCurrentMonth ? 0.4 : 1, cursor: isCurrentMonth ? "default" : "pointer" }}
+          >
+            <ChevronRight size={15} />
+          </button>
+          {!isCurrentMonth && (
+            <button
+              onClick={() => setViewMonth(mKey)}
+              className="text-xs underline ml-1"
+              style={{ color: "rgba(255,255,255,0.85)" }}
+            >
+              Revenir au mois en cours
+            </button>
+          )}
         </div>
         {isManager && collaborators.length > 0 && (
           <button
@@ -1093,13 +1229,34 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
         const objM = member.objectifMontant ?? 5000;
         const resteA = Math.max(0, objA - (f.assurance || 0));
         const resteC = Math.max(0, objC - creditTotal);
-        const declared = entries.filter((e) => e.personId === member.id && e.date.slice(0, 7) === mKey);
+        const declared = entries.filter((e) => e.personId === member.id && e.date.slice(0, 7) === viewMonth);
         // Le montant vendu vient directement du journal déclaré (pas des
         // chiffres officiels saisis à la main) : il reflète en temps réel
         // ce que le collaborateur a déclaré.
         const montantRealise = declared.reduce((s, e) => s + (e.montant || 0), 0);
         const resteM = Math.max(0, objM - montantRealise);
         const isEditing = editing === member.id;
+
+        // Réalisé par produit, calculé depuis le journal déclaré (jamais
+        // saisi à la main) — objectif par produit optionnel, fixé par le
+        // responsable dans "Mettre à jour".
+        const assuranceRealiseParType = Object.fromEntries(
+          ASSURANCE_TYPES.map((at) => [
+            at,
+            declared.filter((e) => e.type === "assurance" && e.assuranceType === at).reduce((s, e) => s + (e.quantite || 1), 0),
+          ])
+        );
+        const creditRealiseParType = Object.fromEntries(
+          CREDIT_TYPES.map((ct) => [
+            ct,
+            declared.filter((e) => e.type === "credit" && e.creditType === ct).reduce((s, e) => s + (e.montant || 0), 0),
+          ])
+        );
+        const objectifsAssuranceParType = member.objectifsAssuranceParType || {};
+        const objectifsCreditParType = member.objectifsCreditParType || {};
+        const hasProduitObjectifs =
+          ASSURANCE_TYPES.some((at) => objectifsAssuranceParType[at] > 0) ||
+          CREDIT_TYPES.some((ct) => objectifsCreditParType[ct] > 0);
 
         return (
           <div key={member.id} className="rounded-2xl overflow-hidden" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
@@ -1183,6 +1340,45 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                     </label>
                   ))}
                 </div>
+
+                <div className="text-xs font-medium mb-2" style={{ color: THEME.navySoft }}>
+                  Objectifs par produit (optionnel)
+                </div>
+                <div className="grid grid-cols-3 gap-2 mb-2">
+                  {ASSURANCE_TYPES.map((at) => (
+                    <label key={at} className="block">
+                      <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{at} (nb)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={objByTypeDraft.assurance[at] || 0}
+                        onChange={(e) =>
+                          setObjByTypeDraft((o) => ({ ...o, assurance: { ...o.assurance, [at]: Number(e.target.value) || 0 } }))
+                        }
+                        className="w-full px-2 py-2 rounded-lg text-sm text-center"
+                        style={{ border: `1px solid ${THEME.line}` }}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="grid grid-cols-3 gap-2 mb-4">
+                  {CREDIT_TYPES.map((ct) => (
+                    <label key={ct} className="block">
+                      <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{ct} (€)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        value={objByTypeDraft.credit[ct] || 0}
+                        onChange={(e) =>
+                          setObjByTypeDraft((o) => ({ ...o, credit: { ...o.credit, [ct]: Number(e.target.value) || 0 } }))
+                        }
+                        className="w-full px-2 py-2 rounded-lg text-sm text-center"
+                        style={{ border: `1px solid ${THEME.line}` }}
+                      />
+                    </label>
+                  ))}
+                </div>
+
                 <div className="flex gap-2">
                   <button
                     onClick={() => saveEdit(member)}
@@ -1199,6 +1395,46 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                     <X size={15} />
                   </button>
                 </div>
+              </div>
+            )}
+
+            {hasProduitObjectifs && (
+              <div className="px-5 pb-5">
+                <details>
+                  <summary className="text-xs cursor-pointer font-medium" style={{ color: isManager ? MANAGER_ACCENT : THEME.teal }}>
+                    Détail des objectifs par produit
+                  </summary>
+                  <div className="mt-2 grid grid-cols-3 gap-2">
+                    {ASSURANCE_TYPES.map((at) => {
+                      const obj = objectifsAssuranceParType[at] || 0;
+                      if (!obj) return null;
+                      const real = assuranceRealiseParType[at] || 0;
+                      const atteint = real >= obj;
+                      return (
+                        <div key={`a-${at}`} className="text-xs px-2 py-2 rounded-lg" style={{ background: THEME.bg }}>
+                          <div className="font-semibold flex items-center gap-1">
+                            {at} {atteint && <CheckCircle2 size={11} style={{ color: THEME.teal }} />}
+                          </div>
+                          <div style={{ color: THEME.navySoft }}>{real} / {obj}</div>
+                        </div>
+                      );
+                    })}
+                    {CREDIT_TYPES.map((ct) => {
+                      const obj = objectifsCreditParType[ct] || 0;
+                      if (!obj) return null;
+                      const real = creditRealiseParType[ct] || 0;
+                      const atteint = real >= obj;
+                      return (
+                        <div key={`c-${ct}`} className="text-xs px-2 py-2 rounded-lg" style={{ background: THEME.bg }}>
+                          <div className="font-semibold flex items-center gap-1">
+                            {ct} {atteint && <CheckCircle2 size={11} style={{ color: THEME.amber }} />}
+                          </div>
+                          <div style={{ color: THEME.navySoft }}>{formatEUR(real)} / {formatEUR(obj)}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </details>
               </div>
             )}
 
@@ -1351,7 +1587,7 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify }) {
 }
 
 /* ---------------- HISTORIQUE TAB (manager only) ---------------- */
-function HistoriqueTab({ deletionHistory }) {
+function HistoriqueTab({ deletionHistory, restoreDeletion }) {
   const sorted = [...deletionHistory].sort((a, b) => (a.deletedAt < b.deletedAt ? 1 : -1));
 
   const describe = (item) => {
@@ -1405,7 +1641,22 @@ function HistoriqueTab({ deletionHistory }) {
                     <div className="text-xs" style={{ color: THEME.navySoft }}>
                       Supprimé par {item.deletedBy?.name || "?"} le {new Date(item.deletedAt).toLocaleString("fr-FR")}
                     </div>
+                    {item.restored && (
+                      <div className="text-xs font-medium mt-1" style={{ color: MANAGER_ACCENT }}>
+                        Restauré le {new Date(item.restoredAt).toLocaleString("fr-FR")}
+                      </div>
+                    )}
                   </div>
+                  {!item.restored && (
+                    <ConfirmActionButton
+                      onConfirm={() => restoreDeletion(item)}
+                      label="Restaurer"
+                      confirmLabel="Confirmer"
+                      icon={RotateCcw}
+                      color={MANAGER_ACCENT}
+                      iconOnly={false}
+                    />
+                  )}
                 </div>
               );
             })}
