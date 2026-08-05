@@ -7,7 +7,7 @@ import {
 import * as XLSX from "xlsx";
 
 const CREDIT_TYPES = ["PAT", "OCA", "BPR", "MP7"];
-const MANAGER_CODE = "OVB2026";
+const MANAGER_CODE = "RESPONSABLE2026";
 
 const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -32,11 +32,7 @@ async function loadShared(key, fallback) {
   }
 }
 async function saveShared(key, value) {
-  try {
-    await window.storage.set(key, JSON.stringify(value), true);
-  } catch (e) {
-    console.error("storage set failed", key, e);
-  }
+  await window.storage.set(key, JSON.stringify(value), true);
 }
 async function loadLocal(key, fallback) {
   try {
@@ -83,22 +79,54 @@ export default function App() {
     })();
   }, []);
 
-  const notify = useCallback((msg) => {
-    setToast(msg);
+  const notify = useCallback((msg, isError = false) => {
+    setToast({ msg, isError });
     setTimeout(() => setToast(null), 2600);
   }, []);
 
+  // Chaque fonction renvoie true si la sauvegarde a réussi, false sinon —
+  // les appelants doivent vérifier ce retour avant d'afficher un message
+  // de succès. En cas d'échec, on revient aussi à l'état précédent pour
+  // que l'écran ne montre jamais comme "enregistrée" une donnée qui ne
+  // l'est pas réellement côté serveur.
   const persistMembers = async (next) => {
+    const previous = members;
     setMembers(next);
-    await saveShared("members", next);
+    try {
+      await saveShared("members", next);
+      return true;
+    } catch (e) {
+      console.error("storage set failed", "members", e);
+      setMembers(previous);
+      notify("Échec de la sauvegarde en ligne — vérifiez votre connexion et réessayez.", true);
+      return false;
+    }
   };
   const persistEntries = async (next) => {
+    const previous = entries;
     setEntries(next);
-    await saveShared("entries", next);
+    try {
+      await saveShared("entries", next);
+      return true;
+    } catch (e) {
+      console.error("storage set failed", "entries", e);
+      setEntries(previous);
+      notify("Échec de la sauvegarde en ligne — vérifiez votre connexion et réessayez.", true);
+      return false;
+    }
   };
   const persistFigures = async (next) => {
+    const previous = figures;
     setFigures(next);
-    await saveShared("figures", next);
+    try {
+      await saveShared("figures", next);
+      return true;
+    } catch (e) {
+      console.error("storage set failed", "figures", e);
+      setFigures(previous);
+      notify("Échec de la sauvegarde en ligne — vérifiez votre connexion et réessayez.", true);
+      return false;
+    }
   };
 
   const login = async (member) => {
@@ -136,10 +164,14 @@ export default function App() {
       {toast && (
         <div
           className="fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2"
-          style={{ background: THEME.navy, color: "#fff" }}
+          style={{ background: toast.isError ? THEME.red : THEME.navy, color: "#fff" }}
         >
-          <CheckCircle2 size={16} style={{ color: THEME.teal }} />
-          {toast}
+          {toast.isError ? (
+            <AlertCircle size={16} />
+          ) : (
+            <CheckCircle2 size={16} style={{ color: THEME.teal }} />
+          )}
+          {toast.msg}
         </div>
       )}
 
@@ -209,9 +241,9 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
       objectifCredit: 5,
       createdAt: new Date().toISOString(),
     };
-    await onCreateMember([...members, newMember]);
+    const ok = await onCreateMember([...members, newMember]);
     onLogin(newMember);
-    notify("Bienvenue ! Compte créé.");
+    if (ok) notify("Bienvenue ! Compte créé.");
   };
 
   const submitManager = async (e) => {
@@ -236,9 +268,9 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
       role: "responsable",
       createdAt: new Date().toISOString(),
     };
-    await onCreateMember([...members, newManager]);
+    const ok = await onCreateMember([...members, newManager]);
     onLogin(newManager);
-    notify("Accès responsable activé.");
+    if (ok) notify("Accès responsable activé.");
   };
 
   return (
@@ -468,9 +500,11 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
       date,
       createdAt: new Date().toISOString(),
     };
-    await setEntries([entry, ...entries]);
-    setDossier("");
-    notify(type === "assurance" ? "Assurance enregistrée." : `Crédit ${creditType} enregistré.`);
+    const ok = await setEntries([entry, ...entries]);
+    if (ok) {
+      setDossier("");
+      notify(type === "assurance" ? "Assurance enregistrée." : `Crédit ${creditType} enregistré.`);
+    }
   };
 
   const remove = async (id) => {
@@ -650,16 +684,18 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
 
   const saveEdit = async (member) => {
     const next = { ...figures, [mKey]: { ...monthFigures, [member.id]: draft } };
-    await setFigures(next);
-    await setMembers(
+    const okFigures = await setFigures(next);
+    const okMembers = await setMembers(
       members.map((m) =>
         m.id === member.id
           ? { ...m, objectifAssurance: Number(objDraft.objectifAssurance) || 0, objectifCredit: Number(objDraft.objectifCredit) || 0 }
           : m
       )
     );
-    setEditing(null);
-    notify(`Chiffres mis à jour — ${member.name}`);
+    if (okFigures && okMembers) {
+      setEditing(null);
+      notify(`Chiffres mis à jour — ${member.name}`);
+    }
   };
 
   const visibleMembers = isManager ? collaborators : collaborators.filter((m) => m.id === session.id);
@@ -900,8 +936,8 @@ function EquipeTab({ members, setMembers, notify }) {
   const managers = members.filter((m) => m.role === "responsable");
 
   const removeMember = async (id) => {
-    await setMembers(members.filter((m) => m.id !== id));
-    notify("Membre retiré.");
+    const ok = await setMembers(members.filter((m) => m.id !== id));
+    if (ok) notify("Membre retiré.");
   };
 
   return (

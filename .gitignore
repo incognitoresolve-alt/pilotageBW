@@ -3,3 +3,7 @@ dist
 .DS_Store
 *.local
 .wrangler
+.env
+.env.*
+!.env.example
+.dev.vars
