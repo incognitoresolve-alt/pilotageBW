@@ -68,6 +68,9 @@ const emptyObjByType = () => ({
   assurance: Object.fromEntries(ASSURANCE_TYPES.map((t) => [t, 0])),
   credit: Object.fromEntries(CREDIT_TYPES.map((t) => [t, 0])),
 });
+// Saisie quotidienne du responsable : pour chaque type de crédit, le nombre
+// de dossiers financés et le montant total financé ce jour-là.
+const emptyCreditDraft = () => Object.fromEntries(CREDIT_TYPES.map((t) => [t, { nombre: 0, montant: 0 }]));
 
 // --- Découpage temporel pour le graphique de performance (Suivi & objectifs) ---
 // Chaque granularité produit une liste fixe de "buckets" (bornes [début,fin]
@@ -153,6 +156,27 @@ function performanceSeries(entries, personId, granularity) {
   }));
 }
 
+// Crédits réalisés par type pour un collaborateur sur un mois donné :
+// somme des saisies quotidiennes du responsable (creditRecords) sur ce
+// mois, plus l'éventuel chiffre "historique" saisi avant l'introduction
+// de la saisie au jour le jour (figures[mois][membre][type]) — jamais
+// perdu, jamais réécrit, simplement additionné une fois pour toutes.
+function creditRealiseParTypeFor(legacyFigures, creditRecords, memberId, monthKey) {
+  const monthRecords = creditRecords.filter((r) => r.memberId === memberId && r.date.slice(0, 7) === monthKey);
+  return Object.fromEntries(
+    CREDIT_TYPES.map((ct) => [
+      ct,
+      (legacyFigures[ct] || 0) + monthRecords.filter((r) => r.creditType === ct).reduce((s, r) => s + (r.montant || 0), 0),
+    ])
+  );
+}
+function creditCountParTypeFor(creditRecords, memberId, monthKey) {
+  const monthRecords = creditRecords.filter((r) => r.memberId === memberId && r.date.slice(0, 7) === monthKey);
+  return Object.fromEntries(
+    CREDIT_TYPES.map((ct) => [ct, monthRecords.filter((r) => r.creditType === ct).reduce((s, r) => s + (r.nombre || 0), 0)])
+  );
+}
+
 async function loadShared(key, fallback, onError) {
   try {
     const r = await window.storage.get(key, true);
@@ -188,6 +212,10 @@ export default function App() {
   const [figures, setFigures] = useState({}); // { [monthKey]: { [memberId]: {assurance, ...CREDIT_TYPES} } }
   const [deletionHistory, setDeletionHistory] = useState([]); // [{id, kind, deletedAt, deletedBy, data}]
   const [invites, setInvites] = useState([]); // [{id, token, name, email, createdAt, createdBy, used, usedAt}]
+  // Crédits financés officiellement validés par le responsable, saisis au
+  // jour le jour (nombre + montant par type) plutôt qu'en un seul chiffre
+  // mensuel écrasé à chaque mise à jour — voir CreditRecordsForm.
+  const [creditRecords, setCreditRecords] = useState([]); // [{id, memberId, date, creditType, nombre, montant, recordedBy, recordedAt}]
   const [session, setSession] = useState(null); // {id, name, email, role}
   const [tab, setTab] = useState("saisie");
   const [toast, setToast] = useState(null);
@@ -221,17 +249,19 @@ export default function App() {
       const onError = (e) => {
         loadError = e;
       };
-      const [m, e, f, h, inv, lastSession] = await Promise.all([
+      const [m, e, f, h, inv, cr, lastSession] = await Promise.all([
         loadShared("members", [], onError),
         loadShared("entries", [], onError),
         loadShared("figures", {}, onError),
         loadShared("deletionHistory", [], onError),
         loadShared("invites", [], onError),
+        loadShared("creditRecords", [], onError),
         loadLocal("last-session", null),
       ]);
       setMembers(m);
       setEntries(e);
       setFigures(f);
+      setCreditRecords(cr);
       setDeletionHistory(h);
       setInvites(inv);
       if (lastSession && m.find((x) => x.id === lastSession.id)) {
@@ -259,12 +289,13 @@ export default function App() {
     const onError = (e) => {
       loadError = e;
     };
-    const [m, e, f, h, inv] = await Promise.all([
+    const [m, e, f, h, inv, cr] = await Promise.all([
       loadShared("members", null, onError),
       loadShared("entries", null, onError),
       loadShared("figures", null, onError),
       loadShared("deletionHistory", null, onError),
       loadShared("invites", null, onError),
+      loadShared("creditRecords", null, onError),
     ]);
     if (loadError) {
       setServerStatus({ ok: false, detail: loadError.message });
@@ -276,6 +307,7 @@ export default function App() {
     if (f !== null) setFigures(f);
     if (h !== null) setDeletionHistory(h);
     if (inv !== null) setInvites(inv);
+    if (cr !== null) setCreditRecords(cr);
     setServerStatus({ ok: true, detail: null });
     if (!silent) notify("Données actualisées.");
     return true;
@@ -338,21 +370,6 @@ export default function App() {
       return false;
     }
   };
-  const persistFigures = async (next) => {
-    const previous = figures;
-    setFigures(next);
-    try {
-      await saveShared("figures", next);
-      setServerStatus({ ok: true, detail: null });
-      return true;
-    } catch (e) {
-      console.error("storage set failed", "figures", e);
-      setFigures(previous);
-      setServerStatus({ ok: false, detail: e.message });
-      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
-      return false;
-    }
-  };
   const persistDeletionHistory = async (next) => {
     const previous = deletionHistory;
     setDeletionHistory(next);
@@ -378,6 +395,21 @@ export default function App() {
     } catch (e) {
       console.error("storage set failed", "invites", e);
       setInvites(previous);
+      setServerStatus({ ok: false, detail: e.message });
+      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
+      return false;
+    }
+  };
+  const persistCreditRecords = async (next) => {
+    const previous = creditRecords;
+    setCreditRecords(next);
+    try {
+      await saveShared("creditRecords", next);
+      setServerStatus({ ok: true, detail: null });
+      return true;
+    } catch (e) {
+      console.error("storage set failed", "creditRecords", e);
+      setCreditRecords(previous);
       setServerStatus({ ok: false, detail: e.message });
       notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
       return false;
@@ -494,12 +526,13 @@ export default function App() {
           entries={entries}
           setEntries={persistEntries}
           figures={figures}
-          setFigures={persistFigures}
           deletionHistory={deletionHistory}
           recordDeletion={recordDeletion}
           restoreDeletion={restoreDeletion}
           invites={invites}
           setInvites={persistInvites}
+          creditRecords={creditRecords}
+          setCreditRecords={persistCreditRecords}
           tab={tab}
           setTab={setTab}
           mKey={mKey}
@@ -831,7 +864,7 @@ function Field({ label, children }) {
 }
 
 /* ---------------- MAIN APP ---------------- */
-function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, setFigures, deletionHistory, recordDeletion, restoreDeletion, invites, setInvites, tab, setTab, mKey, notify, onRefresh, refreshing }) {
+function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, deletionHistory, recordDeletion, restoreDeletion, invites, setInvites, creditRecords, setCreditRecords, tab, setTab, mKey, notify, onRefresh, refreshing }) {
   const isManager = session.role === "responsable";
   const accent = isManager ? MANAGER_ACCENT : THEME.teal;
   const accentSoft = isManager ? MANAGER_ACCENT_SOFT : THEME.tealSoft;
@@ -938,7 +971,8 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
             setMembers={setMembers}
             entries={entries}
             figures={figures}
-            setFigures={setFigures}
+            creditRecords={creditRecords}
+            setCreditRecords={setCreditRecords}
             mKey={mKey}
             notify={notify}
             isManager={isManager}
@@ -1581,7 +1615,7 @@ function StatCard({ icon: Icon, label, value, color }) {
 }
 
 /* ---------------- SUIVI TAB ---------------- */
-function SuiviTab({ session, members, setMembers, entries, figures, setFigures, mKey, notify, isManager }) {
+function SuiviTab({ session, members, setMembers, entries, figures, creditRecords, setCreditRecords, mKey, notify, isManager }) {
   const collaborators = members.filter((m) => m.role === "collaborateur");
   const [viewMonth, setViewMonth] = useState(mKey);
   const isCurrentMonth = viewMonth === mKey;
@@ -1589,10 +1623,11 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
   const daysLeft = daysLeftInMonth();
 
   const [editing, setEditing] = useState(null); // memberId being edited by manager
-  const [draft, setDraft] = useState(emptyFigures());
   const [objDraft, setObjDraft] = useState({ objectifAssurance: 0, objectifCredit: 0, objectifMontant: 0 });
   const [objByTypeDraft, setObjByTypeDraft] = useState(emptyObjByType());
   const [generalObj, setGeneralObj] = useState({ objectifAssurance: 5, objectifCredit: 5, objectifMontant: 5000 });
+  const [creditDate, setCreditDate] = useState(todayISO());
+  const [creditDraft, setCreditDraft] = useState(emptyCreditDraft());
 
   const applyGeneralObjectives = async () => {
     const updated = members.map((m) =>
@@ -1609,9 +1644,21 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
     if (ok) notify(`Objectifs généraux appliqués à ${collaborators.length} collaborateur(s).`);
   };
 
+  // Recharge la saisie du jour (nombre + montant par type de crédit) déjà
+  // enregistrée pour ce collaborateur à cette date, s'il y en a une — pour
+  // corriger une journée sans créer de doublon.
+  const loadCreditDraftFor = (memberId, date) => {
+    const draft = emptyCreditDraft();
+    creditRecords
+      .filter((r) => r.memberId === memberId && r.date === date)
+      .forEach((r) => {
+        draft[r.creditType] = { nombre: r.nombre, montant: r.montant };
+      });
+    return draft;
+  };
+
   const startEdit = (member) => {
     setEditing(member.id);
-    setDraft(monthFigures[member.id] || emptyFigures());
     setObjDraft({
       objectifAssurance: member.objectifAssurance ?? 5,
       objectifCredit: member.objectifCredit ?? 5,
@@ -1621,12 +1668,18 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
       assurance: { ...emptyObjByType().assurance, ...(member.objectifsAssuranceParType || {}) },
       credit: { ...emptyObjByType().credit, ...(member.objectifsCreditParType || {}) },
     });
+    const d = todayISO();
+    setCreditDate(d);
+    setCreditDraft(loadCreditDraftFor(member.id, d));
+  };
+
+  const changeCreditDate = (member, date) => {
+    setCreditDate(date);
+    setCreditDraft(loadCreditDraftFor(member.id, date));
   };
 
   const saveEdit = async (member) => {
-    const next = { ...figures, [viewMonth]: { ...monthFigures, [member.id]: draft } };
-    const okFigures = await setFigures(next);
-    const okMembers = await setMembers(
+    const ok = await setMembers(
       members.map((m) =>
         m.id === member.id
           ? {
@@ -1640,10 +1693,31 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
           : m
       )
     );
-    if (okFigures && okMembers) {
+    if (ok) {
       setEditing(null);
-      notify(`Chiffres mis à jour — ${member.name}`);
+      notify(`Objectifs mis à jour — ${member.name}`);
     }
+  };
+
+  // Remplace (upsert) la saisie de crédits financés du jour choisi pour ce
+  // collaborateur : les enregistrements existants pour ce jour sont
+  // écrasés par la nouvelle saisie (un type à 0/0 est simplement retiré).
+  const saveCreditRecords = async (member) => {
+    const others = creditRecords.filter((r) => !(r.memberId === member.id && r.date === creditDate));
+    const additions = CREDIT_TYPES.filter(
+      (ct) => (creditDraft[ct].nombre || 0) > 0 || (creditDraft[ct].montant || 0) > 0
+    ).map((ct) => ({
+      id: uid(),
+      memberId: member.id,
+      date: creditDate,
+      creditType: ct,
+      nombre: Number(creditDraft[ct].nombre) || 0,
+      montant: Number(creditDraft[ct].montant) || 0,
+      recordedBy: { id: session.id, name: session.name },
+      recordedAt: new Date().toISOString(),
+    }));
+    const ok = await setCreditRecords([...additions, ...others]);
+    if (ok) notify(`Crédits enregistrés pour le ${new Date(creditDate).toLocaleDateString("fr-FR")} — ${member.name}`);
   };
 
   const visibleMembers = isManager ? collaborators : collaborators.filter((m) => m.id === session.id);
@@ -1651,7 +1725,9 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
   const exportExcel = () => {
     const rows = collaborators.map((m) => {
       const f = monthFigures[m.id] || emptyFigures();
-      const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (f[ct] || 0), 0);
+      const creditParType = creditRealiseParTypeFor(f, creditRecords, m.id, viewMonth);
+      const creditCountParType = creditCountParTypeFor(creditRecords, m.id, viewMonth);
+      const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditParType[ct] || 0), 0);
       const declared = entries.filter(
         (e) => e.personId === m.id && e.date.slice(0, 7) === viewMonth
       );
@@ -1664,10 +1740,11 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
         "E-mail": m.email,
         "Assurances": assuranceTotal,
         "Objectif assurances": m.objectifAssurance ?? 5,
-        ...Object.fromEntries(CREDIT_TYPES.map((ct) => [ct, f[ct] || 0])),
-        "Total crédits": creditTotal,
+        ...Object.fromEntries(CREDIT_TYPES.map((ct) => [`${ct} (montant €)`, creditParType[ct] || 0])),
+        ...Object.fromEntries(CREDIT_TYPES.map((ct) => [`${ct} (nombre)`, creditCountParType[ct] || 0])),
+        "Total crédits (montant €)": creditTotal,
         "Objectif crédits": m.objectifCredit ?? 5,
-        "Montant vendu (journal)": montantTotal,
+        "Montant vendu (journal assurances)": montantTotal,
         "Objectif montant (€)": m.objectifMontant ?? 5000,
         "Dossiers déclarés (journal)": declared.length,
       };
@@ -1793,11 +1870,9 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
 
       {visibleMembers.map((member) => {
         const f = monthFigures[member.id] || emptyFigures();
-        const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (f[ct] || 0), 0);
         const objA = member.objectifAssurance ?? 5;
         const objC = member.objectifCredit ?? 5;
         const objM = member.objectifMontant ?? 5000;
-        const resteC = Math.max(0, objC - creditTotal);
         const declared = entries.filter((e) => e.personId === member.id && e.date.slice(0, 7) === viewMonth);
         // Le montant vendu et le nombre d'assurances vendues viennent
         // directement du journal déclaré (pas d'un chiffre saisi à la
@@ -1807,21 +1882,22 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
         const resteM = Math.max(0, objM - montantRealise);
         const isEditing = editing === member.id;
 
-        // Réalisé par produit, calculé depuis le journal déclaré (jamais
-        // saisi à la main) — objectif par produit optionnel, fixé par le
-        // responsable dans "Mettre à jour".
+        // Assurances : calculées depuis le journal déclaré par le
+        // collaborateur (jamais saisi à la main).
         const assuranceRealiseParType = Object.fromEntries(
           ASSURANCE_TYPES.map((at) => [
             at,
             declared.filter((e) => e.type === "assurance" && e.assuranceType === at).reduce((s, e) => s + (e.quantite || 1), 0),
           ])
         );
-        const creditRealiseParType = Object.fromEntries(
-          CREDIT_TYPES.map((ct) => [
-            ct,
-            declared.filter((e) => e.type === "credit" && e.creditType === ct).reduce((s, e) => s + (e.montant || 0), 0),
-          ])
-        );
+        // Crédits : validés par le responsable, saisis au jour le jour
+        // (nombre + montant par type) via "Mettre à jour" — voir
+        // creditRealiseParTypeFor / creditCountParTypeFor.
+        const creditRealiseParType = creditRealiseParTypeFor(f, creditRecords, member.id, viewMonth);
+        const creditCountParType = creditCountParTypeFor(creditRecords, member.id, viewMonth);
+        const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditRealiseParType[ct] || 0), 0);
+        const creditCountTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditCountParType[ct] || 0), 0);
+        const resteC = Math.max(0, objC - creditTotal);
         const assuranceRealise = ASSURANCE_TYPES.reduce((s, at) => s + (assuranceRealiseParType[at] || 0), 0);
         const resteA = Math.max(0, objA - assuranceRealise);
         const objectifsAssuranceParType = member.objectifsAssuranceParType || {};
@@ -1876,6 +1952,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                 draftObjective={objDraft.objectifCredit}
                 readOnlyValue
                 isCurrentMonth={isCurrentMonth}
+                sublabel={`${creditCountTotal} dossier${creditCountTotal !== 1 ? "s" : ""} financé${creditCountTotal !== 1 ? "s" : ""}`}
               />
               <ProgressBlock
                 icon={Euro}
@@ -1900,23 +1977,68 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
 
             {isEditing && (
               <div className="px-5 pb-5">
-                <div className="text-xs font-medium mb-2" style={{ color: THEME.navySoft }}>
-                  Détail des crédits financés par type
-                </div>
-                <div className="grid grid-cols-3 gap-2 mb-4">
-                  {CREDIT_TYPES.map((ct) => (
-                    <label key={ct} className="block">
-                      <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{ct}</span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={draft[ct] || 0}
-                        onChange={(e) => setDraft((d) => ({ ...d, [ct]: Number(e.target.value) || 0 }))}
-                        className="w-full px-2 py-2 rounded-lg text-sm text-center"
-                        style={{ border: `1px solid ${THEME.line}` }}
-                      />
-                    </label>
-                  ))}
+                <div
+                  className="rounded-xl p-3.5 mb-5"
+                  style={{ background: THEME.amberSoft, border: `1px solid ${THEME.amber}30` }}
+                >
+                  <div className="text-xs font-semibold mb-2 flex items-center gap-1.5" style={{ color: THEME.navy }}>
+                    <CreditCard size={13} style={{ color: THEME.amber }} /> Crédits financés — saisie du jour
+                  </div>
+                  <p className="text-xs mb-3" style={{ color: THEME.navySoft }}>
+                    À remplir chaque jour : pour chaque type financé, le nombre de dossiers et le montant total. Choisir une autre date recharge (et permet de corriger) la saisie de ce jour-là.
+                  </p>
+                  <label className="block mb-3">
+                    <span className="block text-xs font-medium mb-1" style={{ color: THEME.navySoft }}>Date</span>
+                    <input
+                      type="date"
+                      value={creditDate}
+                      onChange={(e) => changeCreditDate(member, e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg text-sm"
+                      style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
+                    />
+                  </label>
+                  <div className="grid sm:grid-cols-2 gap-2 mb-3">
+                    {CREDIT_TYPES.map((ct) => (
+                      <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
+                        <div className="text-xs font-semibold mb-1.5">{ct}</div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="block">
+                            <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Nombre</span>
+                            <input
+                              type="number"
+                              min="0"
+                              value={creditDraft[ct].nombre}
+                              onChange={(e) =>
+                                setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], nombre: Number(e.target.value) || 0 } }))
+                              }
+                              className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
+                              style={{ border: `1px solid ${THEME.line}` }}
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Montant (€)</span>
+                            <input
+                              type="number"
+                              min="0"
+                              value={creditDraft[ct].montant}
+                              onChange={(e) =>
+                                setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], montant: Number(e.target.value) || 0 } }))
+                              }
+                              className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
+                              style={{ border: `1px solid ${THEME.line}` }}
+                            />
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => saveCreditRecords(member)}
+                    className="w-full py-2 rounded-lg text-sm font-semibold text-white transition-opacity hover:opacity-90"
+                    style={{ background: THEME.amber }}
+                  >
+                    Enregistrer les crédits du {new Date(creditDate + "T00:00:00").toLocaleDateString("fr-FR")}
+                  </button>
                 </div>
 
                 <div className="text-xs font-medium mb-2" style={{ color: THEME.navySoft }}>
@@ -1963,7 +2085,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                     className="flex-1 py-2 rounded-lg text-sm font-semibold text-white"
                     style={{ background: MANAGER_ACCENT }}
                   >
-                    Enregistrer les chiffres
+                    Enregistrer les objectifs
                   </button>
                   <button
                     onClick={() => setEditing(null)}
@@ -2001,6 +2123,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                       const obj = objectifsCreditParType[ct] || 0;
                       if (!obj) return null;
                       const real = creditRealiseParType[ct] || 0;
+                      const count = creditCountParType[ct] || 0;
                       const atteint = real >= obj;
                       return (
                         <div key={`c-${ct}`} className="text-xs px-2 py-2 rounded-lg" style={{ background: THEME.bg }}>
@@ -2008,6 +2131,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                             {ct} {atteint && <CheckCircle2 size={11} style={{ color: THEME.amber }} />}
                           </div>
                           <div style={{ color: THEME.navySoft }}>{formatEUR(real)} / {formatEUR(obj)}</div>
+                          <div style={{ color: THEME.navySoft }}>{count} dossier{count !== 1 ? "s" : ""}</div>
                         </div>
                       );
                     })}
@@ -2045,7 +2169,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
   );
 }
 
-function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colorSoft, editing, onChangeValue, onChangeObjective, draftValue, draftObjective, readOnlyValue, format = (v) => v, isCurrentMonth = true }) {
+function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colorSoft, editing, onChangeValue, onChangeObjective, draftValue, draftObjective, readOnlyValue, format = (v) => v, isCurrentMonth = true, sublabel }) {
   const pct = objective > 0 ? Math.min(100, Math.round((value / objective) * 100)) : 0;
   // Sans objectif fixé (0), "reste" tombe toujours à 0 : ne pas afficher un
   // "Objectif atteint" trompeur quand il n'y a en réalité aucun objectif.
@@ -2101,6 +2225,11 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
             : `Manquant : ${format(reste)}`
           : "Aucun objectif fixé"}
       </div>
+      {sublabel && (
+        <div className="text-xs mt-1" style={{ color: THEME.navySoft }}>
+          {sublabel}
+        </div>
+      )}
     </div>
   );
 }

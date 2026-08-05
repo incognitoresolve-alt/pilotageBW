@@ -83,6 +83,12 @@ Dans **Suivi & objectifs**, chaque carte collaborateur affiche un graphique lin�
 
 L'onglet **Journal** offre une vue structurée des ventes, jour par jour (au lieu d'une simple liste plate) : chaque jour est une section avec un sous-total (nombre d'assurances, de crédits, montant), et le détail des dossiers déclarés ce jour-là. Un collaborateur y voit son propre journal ; le responsable y voit celui de toute l'équipe, avec le nom du vendeur sur chaque ligne, et peut supprimer n'importe quel dossier (pas seulement les siens). Navigation par mois comme dans "Suivi & objectifs". Dans **Ma saisie**, la carte "Mes ventes du jour" ne montre plus que les ventes du jour même (avec un lien direct vers le Journal complet) — pratique juste après avoir déclaré une vente, sans être noyé dans tout l'historique du mois.
 
+## Crédits financés — saisie quotidienne du responsable
+
+Contrairement aux assurances (déclarées par les collaborateurs et comptabilisées automatiquement), les crédits financés sont validés par le **responsable**, au jour le jour, depuis le panneau "Mettre à jour" de chaque collaborateur dans **Suivi & objectifs**. Pour une date donnée (aujourd'hui par défaut, modifiable), le responsable saisit, pour chaque type de crédit (PAT/OCA/BPR/MP7/AUG/DIM), le **nombre** de dossiers financés et le **montant** total financé. Changer la date recharge la saisie déjà enregistrée ce jour-là (pour la corriger) ou un formulaire vide (pour un nouveau jour) ; le panneau reste ouvert après l'enregistrement pour saisir plusieurs jours à la suite.
+
+Le total "Crédits (total)" et le détail par type qu'on voit ailleurs dans l'app (export Excel compris) sont la somme de toutes ces saisies quotidiennes du mois consulté — plus, le cas échéant, un chiffre "historique" antérieur à cette fonctionnalité (jamais perdu, jamais réécrit, simplement additionné une fois pour toutes).
+
 ## Comptes
 
 - **Collaborateur** : la création d'un compte se fait uniquement par **invitation** — voir ci-dessous. Une fois le compte créé, la connexion se fait ensuite par simple nom + e-mail (comme avant).
