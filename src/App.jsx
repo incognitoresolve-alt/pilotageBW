@@ -8,6 +8,10 @@ import * as XLSX from "xlsx";
 
 const CREDIT_TYPES = ["PAT", "OCA", "BPR", "MP7", "AUG", "DIM"];
 const ASSURANCE_TYPES = ["ALLIN", "DIMC", "DIM"];
+// Pour les crédits PAT et BPR uniquement : précise si le contrat est signé
+// en papier ou via eDirect.
+const CONTRACT_MODES = ["Papier", "eDirect"];
+const CONTRACT_MODE_CREDIT_TYPES = ["PAT", "BPR"];
 const MANAGER_CODE = "RESPONSABLE2026";
 
 const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -24,6 +28,8 @@ const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(
 
 const formatEUR = (n) =>
   new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(n || 0);
+
+const creditLabel = (e) => `Crédit ${e.creditType}${e.contractMode ? ` (${e.contractMode})` : ""}`;
 
 const emptyFigures = () => ({ assurance: 0, PAT: 0, OCA: 0, BPR: 0, MP7: 0, AUG: 0, DIM: 0 });
 
@@ -529,11 +535,14 @@ function TabButton({ active, onClick, icon: Icon, children }) {
 function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify }) {
   const [type, setType] = useState("assurance");
   const [creditType, setCreditType] = useState("PAT");
+  const [contractMode, setContractMode] = useState("Papier");
   const [assuranceType, setAssuranceType] = useState("ALLIN");
   const [quantite, setQuantite] = useState("1");
   const [dossier, setDossier] = useState("");
   const [montant, setMontant] = useState("");
   const [date, setDate] = useState(todayISO());
+
+  const needsContractMode = type === "credit" && CONTRACT_MODE_CREDIT_TYPES.includes(creditType);
 
   const myEntries = useMemo(
     () =>
@@ -552,6 +561,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
       personName: session.name,
       type,
       creditType: type === "credit" ? creditType : null,
+      contractMode: needsContractMode ? contractMode : null,
       assuranceType: type === "assurance" ? assuranceType : null,
       quantite: type === "assurance" ? Number(quantite) || 1 : null,
       dossier: dossier.trim(),
@@ -564,7 +574,11 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
       setDossier("");
       setMontant("");
       setQuantite("1");
-      notify(type === "assurance" ? `Assurance ${assuranceType} enregistrée.` : `Crédit ${creditType} enregistré.`);
+      notify(
+        type === "assurance"
+          ? `Assurance ${assuranceType} enregistrée.`
+          : `Crédit ${creditType}${needsContractMode ? ` (${contractMode})` : ""} enregistré.`
+      );
     }
   };
 
@@ -611,6 +625,27 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
                     }}
                   >
                     {ct}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          )}
+
+          {needsContractMode && (
+            <Field label="Type de contrat">
+              <div className="grid grid-cols-2 gap-2">
+                {CONTRACT_MODES.map((cm) => (
+                  <button
+                    key={cm}
+                    type="button"
+                    onClick={() => setContractMode(cm)}
+                    className="py-2 rounded-lg text-xs font-semibold transition-colors"
+                    style={{
+                      background: contractMode === cm ? THEME.navy : THEME.bg,
+                      color: contractMode === cm ? "#fff" : THEME.navySoft,
+                    }}
+                  >
+                    {cm}
                   </button>
                 ))}
               </div>
@@ -739,7 +774,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
                     )}
                     <div className="min-w-0">
                       <div className="font-medium truncate">
-                        {e.type === "assurance" ? `Assurance ${e.assuranceType}` : `Crédit ${e.creditType}`} — {e.dossier}
+                        {e.type === "assurance" ? `Assurance ${e.assuranceType}` : creditLabel(e)} — {e.dossier}
                       </div>
                       <div className="text-xs" style={{ color: THEME.navySoft }}>
                         {new Date(e.date).toLocaleDateString("fr-FR")}
@@ -1069,7 +1104,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                   <div className="mt-2 space-y-1.5">
                     {declared.map((e) => (
                       <div key={e.id} className="text-xs flex justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: THEME.bg }}>
-                        <span>{e.type === "assurance" ? `Assurance ${e.assuranceType}` : `Crédit ${e.creditType}`} — {e.dossier}</span>
+                        <span>{e.type === "assurance" ? `Assurance ${e.assuranceType}` : creditLabel(e)} — {e.dossier}</span>
                         <span className="flex items-center gap-2 flex-shrink-0">
                           <span className="font-medium" style={{ color: THEME.navy }}>
                             {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
@@ -1218,7 +1253,7 @@ function HistoriqueTab({ deletionHistory }) {
       const label =
         data.type === "assurance"
           ? `Assurance ${data.assuranceType}${data.quantite ? ` (× ${data.quantite})` : ""}`
-          : `Crédit ${data.creditType} — ${formatEUR(data.montant)}`;
+          : `${creditLabel(data)} — ${formatEUR(data.montant)}`;
       return `${label} — ${data.dossier} (${data.personName})`;
     }
     if (kind === "member") {
