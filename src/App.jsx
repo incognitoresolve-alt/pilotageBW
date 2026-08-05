@@ -708,9 +708,7 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
                     <span className="font-medium" style={{ color: THEME.navy }}>
                       {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
                     </span>
-                    <button onClick={() => remove(e.id)} className="p-1.5 rounded-md" aria-label="Supprimer">
-                      <Trash2 size={14} style={{ color: THEME.red }} />
-                    </button>
+                    <ConfirmDeleteButton onConfirm={() => remove(e.id)} label="Supprimer" />
                   </div>
                 </div>
               ))}
@@ -722,6 +720,53 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function ConfirmDeleteButton({ onConfirm, label = "Supprimer" }) {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+
+  if (armed) {
+    return (
+      <div className="flex items-center gap-1 flex-shrink-0">
+        <button
+          type="button"
+          onClick={() => {
+            setArmed(false);
+            onConfirm();
+          }}
+          className="px-2 py-1 rounded-md text-xs font-semibold text-white whitespace-nowrap"
+          style={{ background: THEME.red }}
+        >
+          Confirmer
+        </button>
+        <button
+          type="button"
+          onClick={() => setArmed(false)}
+          className="p-1.5 rounded-md"
+          aria-label="Annuler"
+        >
+          <X size={14} style={{ color: THEME.navySoft }} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setArmed(true)}
+      className="p-1.5 rounded-md flex-shrink-0"
+      aria-label={label}
+    >
+      <Trash2 size={14} style={{ color: THEME.red }} />
+    </button>
   );
 }
 
@@ -1086,9 +1131,7 @@ function EquipeTab({ members, setMembers, notify }) {
                   <span className="text-xs" style={{ color: THEME.navySoft }}>
                     Obj. {m.objectifAssurance ?? 5} assur. / {m.objectifCredit ?? 5} créd. / {formatEUR(m.objectifMontant ?? 5000)}
                   </span>
-                  <button onClick={() => removeMember(m.id)} aria-label="Retirer">
-                    <Trash2 size={14} style={{ color: THEME.red }} />
-                  </button>
+                  <ConfirmDeleteButton onConfirm={() => removeMember(m.id)} label="Retirer" />
                 </div>
               </div>
             ))}
