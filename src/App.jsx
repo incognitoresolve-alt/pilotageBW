@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Shield, CreditCard, Users, LogOut, Plus, Trash2, CheckCircle2,
   Calendar, Settings, ChevronRight, ChevronLeft, Lock, TrendingUp, ClipboardList,
-  AlertCircle, Award, X, Download, Euro, History, RotateCcw, Pencil
+  AlertCircle, Award, X, Download, Euro, History, RotateCcw, Pencil, Link2, Copy
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { verifyManagerCode } from "./lib/storage";
@@ -33,6 +33,16 @@ const shiftMonthKey = (key, delta) => {
 };
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+// Jeton d'invitation : assez long et aléatoire (Web Crypto) pour ne pas être
+// devinable — c'est le lien lui-même qui fait office de preuve d'identité,
+// puisqu'il n'est transmis que par le responsable, manuellement, à la bonne
+// personne.
+const inviteToken = () => {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+};
 
 const formatEUR = (n) =>
   new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(n || 0);
@@ -82,9 +92,21 @@ export default function App() {
   const [entries, setEntries] = useState([]);
   const [figures, setFigures] = useState({}); // { [monthKey]: { [memberId]: {assurance, ...CREDIT_TYPES} } }
   const [deletionHistory, setDeletionHistory] = useState([]); // [{id, kind, deletedAt, deletedBy, data}]
+  const [invites, setInvites] = useState([]); // [{id, token, name, email, createdAt, createdBy, used, usedAt}]
   const [session, setSession] = useState(null); // {id, name, email, role}
   const [tab, setTab] = useState("saisie");
   const [toast, setToast] = useState(null);
+  // Jeton d'invitation présent dans l'URL (?invite=...), le cas échéant —
+  // lu une seule fois au chargement ; effacé de l'URL une fois traité.
+  const [inviteParam, setInviteParam] = useState(() =>
+    new URLSearchParams(window.location.search).get("invite")
+  );
+  const clearInviteParam = useCallback(() => {
+    setInviteParam(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("invite");
+    window.history.replaceState({}, "", url);
+  }, []);
   // ok: null = vérification initiale pas encore terminée, true/false ensuite
   // — reflète la dernière opération réseau (chargement ou sauvegarde),
   // pour un indicateur permanent au lieu de compter sur le toast (qui
@@ -104,17 +126,19 @@ export default function App() {
       const onError = (e) => {
         loadError = e;
       };
-      const [m, e, f, h, lastSession] = await Promise.all([
+      const [m, e, f, h, inv, lastSession] = await Promise.all([
         loadShared("members", [], onError),
         loadShared("entries", [], onError),
         loadShared("figures", {}, onError),
         loadShared("deletionHistory", [], onError),
+        loadShared("invites", [], onError),
         loadLocal("last-session", null),
       ]);
       setMembers(m);
       setEntries(e);
       setFigures(f);
       setDeletionHistory(h);
+      setInvites(inv);
       if (lastSession && m.find((x) => x.id === lastSession.id)) {
         setSession(lastSession);
       }
@@ -188,6 +212,21 @@ export default function App() {
     } catch (e) {
       console.error("storage set failed", "deletionHistory", e);
       setDeletionHistory(previous);
+      setServerStatus({ ok: false, detail: e.message });
+      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
+      return false;
+    }
+  };
+  const persistInvites = async (next) => {
+    const previous = invites;
+    setInvites(next);
+    try {
+      await saveShared("invites", next);
+      setServerStatus({ ok: true, detail: null });
+      return true;
+    } catch (e) {
+      console.error("storage set failed", "invites", e);
+      setInvites(previous);
       setServerStatus({ ok: false, detail: e.message });
       notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
       return false;
@@ -271,7 +310,20 @@ export default function App() {
       <ServerStatusBadge status={serverStatus} />
 
       {!session ? (
-        <LoginScreen members={members} onCreateMember={persistMembers} onLogin={login} notify={notify} />
+        inviteParam ? (
+          <AcceptInviteScreen
+            token={inviteParam}
+            invites={invites}
+            members={members}
+            onCreateMember={persistMembers}
+            onUpdateInvites={persistInvites}
+            onLogin={login}
+            onCancel={clearInviteParam}
+            notify={notify}
+          />
+        ) : (
+          <LoginScreen members={members} onCreateMember={persistMembers} onLogin={login} notify={notify} />
+        )
       ) : (
         <MainApp
           session={session}
@@ -285,6 +337,8 @@ export default function App() {
           deletionHistory={deletionHistory}
           recordDeletion={recordDeletion}
           restoreDeletion={restoreDeletion}
+          invites={invites}
+          setInvites={persistInvites}
           tab={tab}
           setTab={setTab}
           mKey={mKey}
@@ -335,19 +389,7 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
       onLogin(existing);
       return;
     }
-    const newMember = {
-      id: uid(),
-      name: name.trim(),
-      email: em,
-      role: "collaborateur",
-      objectifAssurance: 5,
-      objectifCredit: 5,
-      objectifMontant: 5000,
-      createdAt: new Date().toISOString(),
-    };
-    const ok = await onCreateMember([...members, newMember]);
-    onLogin(newMember);
-    if (ok) notify("Bienvenue ! Compte créé.");
+    setError("Aucun compte trouvé avec cet e-mail. Demandez un lien d'invitation à votre responsable pour créer votre compte.");
   };
 
   const submitManager = async (e) => {
@@ -470,7 +512,7 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
           </form>
         </div>
         <p className="text-center text-xs mt-4" style={{ color: THEME.navySoft }}>
-          Connexion par identification e-mail. Le code responsable protège la mise à jour des chiffres officiels.
+          Connexion par identification e-mail. La création d'un compte collaborateur se fait uniquement via un lien d'invitation envoyé par votre responsable.
         </p>
       </div>
     </div>
@@ -504,6 +546,116 @@ function ServerStatusBadge({ status }) {
   );
 }
 
+// Écran affiché quand l'URL contient ?invite=<jeton> et qu'aucune session
+// n'est active — c'est le seul moyen de créer un compte collaborateur
+// depuis la suppression de l'auto-inscription libre.
+function AcceptInviteScreen({ token, invites, members, onCreateMember, onUpdateInvites, onLogin, onCancel, notify }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const invite = invites.find((i) => i.token === token);
+
+  if (!invite || invite.used) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-4">
+        <div className="w-full max-w-md text-center space-y-4">
+          <AlertCircle size={32} style={{ color: THEME.red }} className="mx-auto" />
+          <h1 className="text-lg font-semibold" style={{ fontFamily: FONT_DISPLAY, color: THEME.navy }}>
+            Lien d'invitation invalide
+          </h1>
+          <p className="text-sm" style={{ color: THEME.navySoft }}>
+            Ce lien n'existe pas, a déjà été utilisé, ou a été révoqué. Demandez un nouveau lien à votre responsable.
+          </p>
+          <button onClick={onCancel} className="text-sm font-medium underline" style={{ color: THEME.teal }}>
+            Revenir à la connexion normale
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const activate = async () => {
+    setBusy(true);
+    setError("");
+    const em = invite.email.toLowerCase();
+    if (members.find((m) => m.email.toLowerCase() === em)) {
+      setError("Un compte existe déjà avec cet e-mail — utilisez la connexion normale.");
+      setBusy(false);
+      return;
+    }
+    const newMember = {
+      id: uid(),
+      name: invite.name,
+      email: em,
+      role: "collaborateur",
+      objectifAssurance: 5,
+      objectifCredit: 5,
+      objectifMontant: 5000,
+      createdAt: new Date().toISOString(),
+    };
+    const okMembers = await onCreateMember([...members, newMember]);
+    if (!okMembers) {
+      setBusy(false);
+      return;
+    }
+    const okInvites = await onUpdateInvites(
+      invites.map((i) => (i.id === invite.id ? { ...i, used: true, usedAt: new Date().toISOString() } : i))
+    );
+    onCancel();
+    await onLogin(newMember);
+    if (okInvites) notify("Bienvenue ! Votre compte a été activé.");
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center px-4">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-8">
+          <div
+            className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4"
+            style={{ background: THEME.navy }}
+          >
+            <Users size={26} color={THEME.teal} />
+          </div>
+          <h1 style={{ fontFamily: FONT_DISPLAY, color: THEME.navy }} className="text-2xl font-semibold tracking-tight">
+            Invitation à rejoindre l'équipe
+          </h1>
+          <p className="text-sm mt-1" style={{ color: THEME.navySoft }}>
+            Suivi Commercial — Assurances & crédits
+          </p>
+        </div>
+
+        <div
+          className="rounded-2xl overflow-hidden shadow-sm p-6 space-y-4"
+          style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}
+        >
+          <div className="text-sm">
+            <div className="text-xs font-medium mb-1" style={{ color: THEME.navySoft }}>
+              Compte à activer
+            </div>
+            <div className="font-semibold">{invite.name}</div>
+            <div style={{ color: THEME.navySoft }}>{invite.email}</div>
+          </div>
+          {error && (
+            <div className="text-sm flex items-center gap-1.5" style={{ color: THEME.red }}>
+              <AlertCircle size={14} /> {error}
+            </div>
+          )}
+          <button
+            onClick={activate}
+            disabled={busy}
+            className="w-full py-2.5 rounded-lg text-sm font-semibold text-white flex items-center justify-center gap-1.5 transition-opacity hover:opacity-90 disabled:opacity-60"
+            style={{ background: THEME.teal }}
+          >
+            Activer mon compte <ChevronRight size={15} />
+          </button>
+          <button onClick={onCancel} className="w-full text-center text-xs underline" style={{ color: THEME.navySoft }}>
+            Ce n'est pas moi / revenir à la connexion
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Field({ label, children }) {
   return (
     <label className="block">
@@ -516,7 +668,7 @@ function Field({ label, children }) {
 }
 
 /* ---------------- MAIN APP ---------------- */
-function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, setFigures, deletionHistory, recordDeletion, restoreDeletion, tab, setTab, mKey, notify }) {
+function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, setFigures, deletionHistory, recordDeletion, restoreDeletion, invites, setInvites, tab, setTab, mKey, notify }) {
   const isManager = session.role === "responsable";
   const accent = isManager ? MANAGER_ACCENT : THEME.teal;
   const accentSoft = isManager ? MANAGER_ACCENT_SOFT : THEME.tealSoft;
@@ -605,7 +757,15 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
           />
         )}
         {tab === "equipe" && isManager && (
-          <EquipeTab members={members} setMembers={setMembers} recordDeletion={recordDeletion} session={session} notify={notify} />
+          <EquipeTab
+            members={members}
+            setMembers={setMembers}
+            recordDeletion={recordDeletion}
+            session={session}
+            notify={notify}
+            invites={invites}
+            setInvites={setInvites}
+          />
         )}
         {tab === "historique" && isManager && (
           <HistoriqueTab deletionHistory={deletionHistory} restoreDeletion={restoreDeletion} />
@@ -1566,9 +1726,15 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
 }
 
 /* ---------------- EQUIPE TAB (manager only) ---------------- */
-function EquipeTab({ members, setMembers, recordDeletion, session, notify }) {
+function EquipeTab({ members, setMembers, recordDeletion, session, notify, invites, setInvites }) {
   const collaborators = members.filter((m) => m.role === "collaborateur");
   const managers = members.filter((m) => m.role === "responsable");
+  const pendingInvites = invites.filter((i) => !i.used);
+
+  const [inviteName, setInviteName] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteError, setInviteError] = useState("");
+  const [copiedId, setCopiedId] = useState(null);
 
   const removeMember = async (id) => {
     const member = members.find((m) => m.id === id);
@@ -1579,8 +1745,131 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify }) {
     }
   };
 
+  const createInvite = async (e) => {
+    e.preventDefault();
+    setInviteError("");
+    const em = inviteEmail.trim().toLowerCase();
+    if (!em || !inviteName.trim()) return setInviteError("Renseignez le nom et l'e-mail du collaborateur à inviter.");
+    if (members.find((m) => m.email.toLowerCase() === em)) return setInviteError("Un compte existe déjà avec cet e-mail.");
+    if (pendingInvites.find((i) => i.email.toLowerCase() === em)) return setInviteError("Une invitation est déjà en attente pour cet e-mail.");
+    const invite = {
+      id: uid(),
+      token: inviteToken(),
+      name: inviteName.trim(),
+      email: em,
+      createdAt: new Date().toISOString(),
+      createdBy: { id: session.id, name: session.name },
+      used: false,
+      usedAt: null,
+    };
+    const ok = await setInvites([invite, ...invites]);
+    if (ok) {
+      setInviteName("");
+      setInviteEmail("");
+      notify("Invitation créée. Copiez le lien et envoyez-le au collaborateur.");
+    }
+  };
+
+  const revokeInvite = async (id) => {
+    const ok = await setInvites(invites.filter((i) => i.id !== id));
+    if (ok) notify("Invitation révoquée.");
+  };
+
+  const linkFor = (token) => `${window.location.origin}${window.location.pathname}?invite=${token}`;
+
+  const copyLink = async (invite) => {
+    const link = linkFor(invite.token);
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopiedId(invite.id);
+      setTimeout(() => setCopiedId((c) => (c === invite.id ? null : c)), 2000);
+      notify("Lien copié dans le presse-papier.");
+    } catch {
+      notify(`Copie automatique impossible — lien : ${link}`, true);
+    }
+  };
+
   return (
     <div className="space-y-5">
+      <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+        <h2 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
+          <Link2 size={15} style={{ color: MANAGER_ACCENT }} /> Inviter un collaborateur
+        </h2>
+        <p className="text-xs mb-3" style={{ color: THEME.navySoft }}>
+          Générez un lien unique et envoyez-le vous-même (e-mail, WhatsApp, SMS…) à la personne concernée. Elle l'utilise pour activer son compte — aucun service tiers n'est impliqué.
+        </p>
+        <form onSubmit={createInvite} className="flex flex-wrap gap-2 items-end mb-2">
+          <div className="flex-1 min-w-[10rem]">
+            <label className="block text-xs font-medium mb-1" style={{ color: THEME.navySoft }}>
+              Nom complet
+            </label>
+            <input
+              value={inviteName}
+              onChange={(e) => setInviteName(e.target.value)}
+              placeholder="Prénom Nom"
+              className="w-full px-3 py-2 rounded-lg text-sm"
+              style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
+            />
+          </div>
+          <div className="flex-1 min-w-[12rem]">
+            <label className="block text-xs font-medium mb-1" style={{ color: THEME.navySoft }}>
+              E-mail
+            </label>
+            <input
+              type="email"
+              value={inviteEmail}
+              onChange={(e) => setInviteEmail(e.target.value)}
+              placeholder="prenom.nom@monentreprise.be"
+              className="w-full px-3 py-2 rounded-lg text-sm"
+              style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
+            />
+          </div>
+          <button
+            type="submit"
+            className="px-3.5 py-2 rounded-lg text-sm font-semibold text-white flex items-center gap-1.5"
+            style={{ background: MANAGER_ACCENT }}
+          >
+            <Plus size={15} /> Générer le lien
+          </button>
+        </form>
+        {inviteError && (
+          <div className="text-sm flex items-center gap-1.5 mb-2" style={{ color: THEME.red }}>
+            <AlertCircle size={14} /> {inviteError}
+          </div>
+        )}
+        {pendingInvites.length > 0 && (
+          <div className="space-y-2 mt-3">
+            {pendingInvites.map((inv) => (
+              <div
+                key={inv.id}
+                className="flex items-center justify-between px-3 py-2.5 rounded-lg text-sm gap-2"
+                style={{ background: THEME.bg }}
+              >
+                <div className="min-w-0">
+                  <div className="font-medium truncate">{inv.name}</div>
+                  <div className="text-xs truncate" style={{ color: THEME.navySoft }}>
+                    {inv.email}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => copyLink(inv)}
+                    className="px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1"
+                    style={{
+                      background: copiedId === inv.id ? THEME.tealSoft : MANAGER_ACCENT_SOFT,
+                      color: copiedId === inv.id ? THEME.teal : MANAGER_ACCENT,
+                    }}
+                  >
+                    <Copy size={12} /> {copiedId === inv.id ? "Copié !" : "Copier le lien"}
+                  </button>
+                  <ConfirmActionButton onConfirm={() => revokeInvite(inv.id)} label="Révoquer" iconOnly={false} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
         <h2 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
           <Users size={15} style={{ color: MANAGER_ACCENT }} /> Collaborateurs ({collaborators.length})

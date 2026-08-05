@@ -67,5 +67,11 @@ Dans l'onglet **Suivi & objectifs**, le responsable dispose d'un bouton **Export
 
 ## Comptes
 
-- **Collaborateur** : nom + e-mail suffisent pour créer un compte.
+- **Collaborateur** : la création d'un compte se fait uniquement par **invitation** — voir ci-dessous. Une fois le compte créé, la connexion se fait ensuite par simple nom + e-mail (comme avant).
 - **Responsable** : nécessite le code d'accès, défini par `MANAGER_CODE` dans `wrangler.toml` (à personnaliser avant mise en production). Contrairement à `APP_SECRET`, ce code est vérifié côté Worker (`POST /api/verify-manager-code`) et n'est **jamais envoyé au navigateur** — sa valeur reste un vrai secret, invisible dans le bundle JS public.
+
+## Invitation des collaborateurs
+
+Depuis l'onglet **Équipe**, le responsable génère un lien d'invitation unique pour chaque nouveau collaborateur (nom + e-mail), puis l'envoie lui-même par le canal de son choix (e-mail, WhatsApp, SMS…) — **aucun service tiers d'envoi d'e-mail n'est utilisé**. Le lien (`https://.../?invite=<jeton>`) contient un jeton aléatoire de 24 octets généré via `crypto.getRandomValues`. La personne qui le reçoit clique dessus, vérifie que le nom/e-mail affichés sont bien les siens, puis clique sur "Activer mon compte" pour créer son profil et se connecter directement.
+
+Un lien d'invitation ne peut être utilisé qu'une seule fois (il est marqué `used` après activation) et peut être révoqué à tout moment tant qu'il n'a pas été utilisé. L'auto-inscription libre (n'importe qui créant un compte avec un nom + e-mail arbitraires) a été supprimée : sans invitation valide, un e-mail inconnu ne peut plus se connecter côté collaborateur.
