@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Shield, CreditCard, Users, LogOut, Plus, Trash2, CheckCircle2,
   Calendar, Settings, ChevronRight, Lock, TrendingUp, ClipboardList,
-  AlertCircle, Award, X, Download
+  AlertCircle, Award, X, Download, Euro
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -242,6 +242,7 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
       role: "collaborateur",
       objectifAssurance: 5,
       objectifCredit: 5,
+      objectifMontant: 5000,
       createdAt: new Date().toISOString(),
     };
     const ok = await onCreateMember([...members, newMember]);
@@ -712,7 +713,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
 
   const [editing, setEditing] = useState(null); // memberId being edited by manager
   const [draft, setDraft] = useState(emptyFigures());
-  const [objDraft, setObjDraft] = useState({ objectifAssurance: 0, objectifCredit: 0 });
+  const [objDraft, setObjDraft] = useState({ objectifAssurance: 0, objectifCredit: 0, objectifMontant: 0 });
 
   const startEdit = (member) => {
     setEditing(member.id);
@@ -720,6 +721,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
     setObjDraft({
       objectifAssurance: member.objectifAssurance ?? 5,
       objectifCredit: member.objectifCredit ?? 5,
+      objectifMontant: member.objectifMontant ?? 5000,
     });
   };
 
@@ -729,7 +731,12 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
     const okMembers = await setMembers(
       members.map((m) =>
         m.id === member.id
-          ? { ...m, objectifAssurance: Number(objDraft.objectifAssurance) || 0, objectifCredit: Number(objDraft.objectifCredit) || 0 }
+          ? {
+              ...m,
+              objectifAssurance: Number(objDraft.objectifAssurance) || 0,
+              objectifCredit: Number(objDraft.objectifCredit) || 0,
+              objectifMontant: Number(objDraft.objectifMontant) || 0,
+            }
           : m
       )
     );
@@ -757,7 +764,8 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
         ...Object.fromEntries(CREDIT_TYPES.map((ct) => [ct, f[ct] || 0])),
         "Total crédits": creditTotal,
         "Objectif crédits": m.objectifCredit ?? 5,
-        "Montant total vendu (journal)": montantTotal,
+        "Montant vendu (journal)": montantTotal,
+        "Objectif montant (€)": m.objectifMontant ?? 5000,
         "Dossiers déclarés (journal)": declared.length,
       };
     });
@@ -802,9 +810,15 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
         const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (f[ct] || 0), 0);
         const objA = member.objectifAssurance ?? 5;
         const objC = member.objectifCredit ?? 5;
+        const objM = member.objectifMontant ?? 5000;
         const resteA = Math.max(0, objA - (f.assurance || 0));
         const resteC = Math.max(0, objC - creditTotal);
         const declared = entries.filter((e) => e.personId === member.id && e.date.slice(0, 7) === mKey);
+        // Le montant vendu vient directement du journal déclaré (pas des
+        // chiffres officiels saisis à la main) : il reflète en temps réel
+        // ce que le collaborateur a déclaré.
+        const montantRealise = declared.reduce((s, e) => s + (e.montant || 0), 0);
+        const resteM = Math.max(0, objM - montantRealise);
         const isEditing = editing === member.id;
 
         return (
@@ -825,7 +839,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
               )}
             </div>
 
-            <div className="p-5 grid sm:grid-cols-2 gap-4">
+            <div className="p-5 grid sm:grid-cols-3 gap-4">
               <ProgressBlock
                 icon={Shield}
                 label="Assurances"
@@ -852,6 +866,20 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                 onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifCredit: v }))}
                 draftObjective={objDraft.objectifCredit}
                 readOnlyValue
+              />
+              <ProgressBlock
+                icon={Euro}
+                label="Montant vendu"
+                value={montantRealise}
+                objective={objM}
+                reste={resteM}
+                color={THEME.navy}
+                colorSoft={THEME.line}
+                editing={isEditing}
+                onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifMontant: v }))}
+                draftObjective={objDraft.objectifMontant}
+                readOnlyValue
+                format={formatEUR}
               />
             </div>
 
@@ -921,7 +949,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
   );
 }
 
-function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colorSoft, editing, onChangeValue, onChangeObjective, draftValue, draftObjective, readOnlyValue }) {
+function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colorSoft, editing, onChangeValue, onChangeObjective, draftValue, draftObjective, readOnlyValue, format = (v) => v }) {
   const pct = objective > 0 ? Math.min(100, Math.round((value / objective) * 100)) : 0;
   const atteint = reste === 0;
   return (
@@ -945,21 +973,21 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
               style={{ border: `1px solid ${THEME.line}` }}
             />
           )}
-          {readOnlyValue && <span style={{ fontFamily: FONT_DISPLAY }} className="text-xl font-semibold">{value}</span>}
+          {readOnlyValue && <span style={{ fontFamily: FONT_DISPLAY }} className="text-xl font-semibold">{format(value)}</span>}
           <span className="text-xs" style={{ color: THEME.navySoft }}>/ objectif</span>
           <input
             type="number"
             min="0"
             value={draftObjective}
             onChange={(e) => onChangeObjective(Number(e.target.value) || 0)}
-            className="w-16 px-2 py-1.5 rounded-lg text-sm text-center"
+            className="w-20 px-2 py-1.5 rounded-lg text-sm text-center"
             style={{ border: `1px solid ${THEME.line}` }}
           />
         </div>
       ) : (
-        <div className="flex items-baseline gap-1 mb-2">
-          <span style={{ fontFamily: FONT_DISPLAY, color: THEME.navy }} className="text-2xl font-semibold">{value}</span>
-          <span className="text-sm" style={{ color: THEME.navySoft }}>/ {objective}</span>
+        <div className="flex items-baseline gap-1 mb-2 flex-wrap">
+          <span style={{ fontFamily: FONT_DISPLAY, color: THEME.navy }} className="text-2xl font-semibold">{format(value)}</span>
+          <span className="text-sm" style={{ color: THEME.navySoft }}>/ {format(objective)}</span>
         </div>
       )}
 
@@ -967,7 +995,7 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
         <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
       </div>
       <div className="text-xs font-medium" style={{ color: atteint ? color : THEME.navySoft }}>
-        {atteint ? "Objectif atteint" : `Reste ${reste} avant la fin du mois`}
+        {atteint ? "Objectif atteint" : `Reste ${format(reste)} avant la fin du mois`}
       </div>
     </div>
   );
@@ -1003,7 +1031,7 @@ function EquipeTab({ members, setMembers, notify }) {
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-xs" style={{ color: THEME.navySoft }}>
-                    Obj. {m.objectifAssurance ?? 5} assur. / {m.objectifCredit ?? 5} créd.
+                    Obj. {m.objectifAssurance ?? 5} assur. / {m.objectifCredit ?? 5} créd. / {formatEUR(m.objectifMontant ?? 5000)}
                   </span>
                   <button onClick={() => removeMember(m.id)} aria-label="Retirer">
                     <Trash2 size={14} style={{ color: THEME.red }} />
