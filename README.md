@@ -79,6 +79,10 @@ Dans l'onglet **Suivi & objectifs**, le responsable dispose d'un bouton **Export
 
 Dans **Suivi & objectifs**, chaque carte collaborateur affiche un graphique linéaire "Performance — dossiers vendus" (nombre de ventes déclarées, assurances + crédits confondus, pondéré par la quantité pour les assurances). Quatre bascules — **Jour** (14 derniers jours), **Semaine** (8 dernières semaines), **Mois** (6 derniers mois), **Année** (5 dernières années) — recalculent la série depuis le journal des ventes déclarées, tous mois confondus (contrairement au reste de l'onglet qui reste centré sur le mois consulté). Survoler le graphique affiche un repère + une infobulle ; un détail chiffré par période (tableau) est disponible sous le graphique, replié par défaut, pour un accès sans souris.
 
+## Journal des ventes
+
+L'onglet **Journal** offre une vue structurée des ventes, jour par jour (au lieu d'une simple liste plate) : chaque jour est une section avec un sous-total (nombre d'assurances, de crédits, montant), et le détail des dossiers déclarés ce jour-là. Un collaborateur y voit son propre journal ; le responsable y voit celui de toute l'équipe, avec le nom du vendeur sur chaque ligne, et peut supprimer n'importe quel dossier (pas seulement les siens). Navigation par mois comme dans "Suivi & objectifs". Dans **Ma saisie**, la carte "Mes ventes du jour" ne montre plus que les ventes du jour même (avec un lien direct vers le Journal complet) — pratique juste après avoir déclaré une vente, sans être noyé dans tout l'historique du mois.
+
 ## Comptes
 
 - **Collaborateur** : la création d'un compte se fait uniquement par **invitation** — voir ci-dessous. Une fois le compte créé, la connexion se fait ensuite par simple nom + e-mail (comme avant).

@@ -32,6 +32,16 @@ const shiftMonthKey = (key, delta) => {
   const [y, m] = key.split("-").map(Number);
   return monthKey(new Date(y, m - 1 + delta, 1));
 };
+// Libellé de jour pour le journal structuré : "Aujourd'hui" / "Hier" pour
+// les deux derniers jours, sinon le jour de semaine complet.
+const dayLabel = (dateISO) => {
+  const yd = new Date();
+  yd.setDate(yd.getDate() - 1);
+  if (dateISO === todayISO()) return "Aujourd'hui";
+  if (dateISO === toISODate(yd)) return "Hier";
+  const [y, m, d] = dateISO.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("fr-FR", { weekday: "long", day: "2-digit", month: "long" });
+};
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
@@ -880,6 +890,9 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
         <TabButton active={tab === "saisie"} onClick={() => setTab("saisie")} icon={ClipboardList} accent={accent}>
           Ma saisie
         </TabButton>
+        <TabButton active={tab === "journal"} onClick={() => setTab("journal")} icon={Calendar} accent={accent}>
+          Journal
+        </TabButton>
         <TabButton active={tab === "suivi"} onClick={() => setTab("suivi")} icon={Award} accent={accent}>
           Suivi & objectifs
         </TabButton>
@@ -902,6 +915,18 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
             entries={entries}
             setEntries={setEntries}
             recordDeletion={recordDeletion}
+            mKey={mKey}
+            notify={notify}
+            setTab={setTab}
+          />
+        )}
+        {tab === "journal" && (
+          <JournalTab
+            session={session}
+            entries={entries}
+            setEntries={setEntries}
+            recordDeletion={recordDeletion}
+            isManager={isManager}
             mKey={mKey}
             notify={notify}
           />
@@ -955,7 +980,7 @@ function TabButton({ active, onClick, icon: Icon, children, accent = THEME.teal 
 }
 
 /* ---------------- SAISIE TAB ---------------- */
-function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify }) {
+function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify, setTab }) {
   const [type, setType] = useState("assurance");
   const [creditType, setCreditType] = useState("PAT");
   const [contractMode, setContractMode] = useState("Papier");
@@ -974,6 +999,10 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
         .filter((e) => e.personId === session.id && e.date.slice(0, 7) === mKey)
         .sort((a, b) => (a.date < b.date ? 1 : -1)),
     [entries, session.id, mKey]
+  );
+  const todayEntries = useMemo(
+    () => myEntries.filter((e) => e.date === todayISO()),
+    [myEntries]
   );
 
   const resetForm = () => {
@@ -1225,14 +1254,23 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
         </div>
 
         <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
-          <h2 className="text-sm font-semibold mb-3">Mes dossiers déclarés — {monthLabel()}</h2>
-          {myEntries.length === 0 ? (
+          <div className="flex items-center justify-between mb-3 gap-2">
+            <h2 className="text-sm font-semibold">Mes ventes du jour</h2>
+            <button
+              onClick={() => setTab("journal")}
+              className="text-xs font-medium flex items-center gap-1 flex-shrink-0"
+              style={{ color: THEME.teal }}
+            >
+              Voir le journal complet <ChevronRight size={13} />
+            </button>
+          </div>
+          {todayEntries.length === 0 ? (
             <p className="text-sm py-6 text-center" style={{ color: THEME.navySoft }}>
-              Aucune vente déclarée ce mois-ci.
+              Aucune vente déclarée aujourd'hui.
             </p>
           ) : (
-            <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
-              {myEntries.map((e) => (
+            <div className="space-y-2">
+              {todayEntries.map((e) => (
                 <div
                   key={e.id}
                   className="flex items-center justify-between px-3 py-2.5 rounded-lg text-sm"
@@ -1247,9 +1285,6 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
                     <div className="min-w-0">
                       <div className="font-medium truncate">
                         {e.type === "assurance" ? `Assurance ${e.assuranceType}` : creditLabel(e)} — {e.dossier}
-                      </div>
-                      <div className="text-xs" style={{ color: THEME.navySoft }}>
-                        {new Date(e.date).toLocaleDateString("fr-FR")}
                       </div>
                     </div>
                   </div>
@@ -1275,6 +1310,169 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
           </p>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ---------------- JOURNAL TAB ---------------- */
+// Vue structurée des ventes, jour par jour : pour un collaborateur, son
+// propre journal ; pour le responsable, celui de toute l'équipe (avec le
+// nom du vendeur sur chaque ligne). Navigation par mois comme dans "Suivi
+// & objectifs", et un sous-total par jour (assurances / crédits / montant)
+// pour un coup d'œil rapide sur l'activité d'une journée donnée.
+function JournalTab({ session, entries, setEntries, recordDeletion, isManager, mKey, notify }) {
+  const [viewMonth, setViewMonth] = useState(mKey);
+  const isCurrentMonth = viewMonth === mKey;
+
+  const scoped = useMemo(
+    () =>
+      entries
+        .filter((e) => e.date.slice(0, 7) === viewMonth && (isManager || e.personId === session.id))
+        .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (a.createdAt < b.createdAt ? 1 : -1))),
+    [entries, viewMonth, isManager, session.id]
+  );
+
+  const byDay = useMemo(() => {
+    const map = new Map();
+    scoped.forEach((e) => {
+      if (!map.has(e.date)) map.set(e.date, []);
+      map.get(e.date).push(e);
+    });
+    return [...map.entries()];
+  }, [scoped]);
+
+  const remove = async (entry) => {
+    const ok = await setEntries(entries.filter((x) => x.id !== entry.id));
+    if (ok) {
+      await recordDeletion("entry", entry, session);
+      notify("Vente supprimée.");
+    }
+  };
+
+  const dayStats = (dayEntries) => ({
+    assurances: dayEntries.filter((e) => e.type === "assurance").reduce((s, e) => s + (e.quantite || 1), 0),
+    credits: dayEntries.filter((e) => e.type === "credit").length,
+    montant: dayEntries.reduce((s, e) => s + (e.montant || 0), 0),
+  });
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap" style={{ background: THEME.navy, color: "#fff" }}>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setViewMonth((v) => shiftMonthKey(v, -1))}
+            aria-label="Mois précédent"
+            className="p-1.5 rounded-lg"
+            style={{ background: "rgba(255,255,255,0.12)" }}
+          >
+            <ChevronLeft size={15} />
+          </button>
+          <Calendar size={18} style={{ color: isCurrentMonth ? THEME.teal : "rgba(255,255,255,0.6)" }} />
+          <div className="text-sm capitalize">
+            {monthKeyLabel(viewMonth)}
+            {!isCurrentMonth && (
+              <span className="text-xs ml-2" style={{ color: "rgba(255,255,255,0.6)" }}>
+                (archivé)
+              </span>
+            )}
+          </div>
+          <button
+            onClick={() => setViewMonth((v) => shiftMonthKey(v, 1))}
+            disabled={isCurrentMonth}
+            aria-label="Mois suivant"
+            className="p-1.5 rounded-lg"
+            style={{ background: "rgba(255,255,255,0.12)", opacity: isCurrentMonth ? 0.4 : 1, cursor: isCurrentMonth ? "default" : "pointer" }}
+          >
+            <ChevronRight size={15} />
+          </button>
+          {!isCurrentMonth && (
+            <button
+              onClick={() => setViewMonth(mKey)}
+              className="text-xs underline ml-1"
+              style={{ color: "rgba(255,255,255,0.85)" }}
+            >
+              Revenir au mois en cours
+            </button>
+          )}
+        </div>
+        <div className="text-xs" style={{ color: "rgba(255,255,255,0.75)" }}>
+          {scoped.length} dossier{scoped.length !== 1 ? "s" : ""} sur {byDay.length} jour{byDay.length !== 1 ? "s" : ""}
+        </div>
+      </div>
+
+      {byDay.length === 0 ? (
+        <div className="rounded-2xl p-10 text-center" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+          <p className="text-sm" style={{ color: THEME.navySoft }}>
+            Aucune vente déclarée sur cette période.
+          </p>
+        </div>
+      ) : (
+        byDay.map(([date, dayEntries]) => {
+          const { assurances, credits, montant } = dayStats(dayEntries);
+          return (
+            <div key={date} className="rounded-2xl overflow-hidden" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+              <div
+                className="px-5 py-3 flex items-center justify-between flex-wrap gap-2"
+                style={{ borderBottom: `1px solid ${THEME.line}`, background: THEME.bg }}
+              >
+                <div className="text-sm font-semibold capitalize">{dayLabel(date)}</div>
+                <div className="flex items-center gap-3 text-xs" style={{ color: THEME.navySoft }}>
+                  {assurances > 0 && (
+                    <span className="flex items-center gap-1">
+                      <Shield size={12} style={{ color: THEME.teal }} /> {assurances}
+                    </span>
+                  )}
+                  {credits > 0 && (
+                    <span className="flex items-center gap-1">
+                      <CreditCard size={12} style={{ color: THEME.amber }} /> {credits}
+                    </span>
+                  )}
+                  {montant > 0 && (
+                    <span className="font-medium" style={{ color: THEME.navy }}>
+                      {formatEUR(montant)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="p-3 space-y-2">
+                {dayEntries.map((e) => (
+                  <div
+                    key={e.id}
+                    className="flex items-center justify-between px-3 py-2.5 rounded-lg text-sm gap-2"
+                    style={{ background: THEME.bg }}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {e.type === "assurance" ? (
+                        <Shield size={15} style={{ color: THEME.teal, flexShrink: 0 }} />
+                      ) : (
+                        <CreditCard size={15} style={{ color: THEME.amber, flexShrink: 0 }} />
+                      )}
+                      <div className="min-w-0">
+                        <div className="font-medium truncate">
+                          {e.type === "assurance" ? `Assurance ${e.assuranceType}` : creditLabel(e)} — {e.dossier}
+                        </div>
+                        {isManager && (
+                          <div className="text-xs truncate" style={{ color: THEME.navySoft }}>
+                            {e.personName}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className="font-medium" style={{ color: THEME.navy }}>
+                        {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
+                      </span>
+                      {(isManager || e.personId === session.id) && (
+                        <ConfirmActionButton onConfirm={() => remove(e)} label="Supprimer" />
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }
