@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "pages:dev": "wrangler pages dev -- npm run dev",
+    "worker:dev": "npm run build && wrangler dev",
     "build": "vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && wrangler pages deploy dist"
+    "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
     "lucide-react": "^0.474.0",
