@@ -37,6 +37,8 @@ L'API (`/api/storage/*`) exige un header `X-App-Secret` correspondant au secret 
 
 Les deux valeurs `APP_SECRET` (Worker) et `VITE_APP_SECRET` (build frontend) doivent être **identiques** — n'importe quelle chaîne aléatoire suffit (ex. générée avec `openssl rand -hex 16`).
 
+⚠️ `VITE_APP_SECRET` est lue au moment du `npm run build`, pas à l'exécution : la créer, la modifier ou décocher "Encrypt" dans le dashboard **ne suffit pas** — il faut ensuite déclencher un nouveau déploiement (un push, ou "Retry deployment" depuis l'onglet Déploiements) pour qu'un nouveau build reprenne la valeur à jour. Tant que ça n'est pas fait, le site continue de servir l'ancien bundle avec l'ancienne (ou l'absence de) valeur.
+
 ## Déploiement sur Cloudflare
 
 1. **Créer le namespace KV** (une seule fois) :
