@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
-const CREDIT_TYPES = ["PAT", "OCA", "BPR", "MP7"];
+const CREDIT_TYPES = ["PAT", "OCA", "BPR", "MP7", "AUG", "DIM"];
 const MANAGER_CODE = "RESPONSABLE2026";
 
 const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -21,7 +21,10 @@ const monthLabel = () =>
 
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
-const emptyFigures = () => ({ assurance: 0, PAT: 0, OCA: 0, BPR: 0, MP7: 0 });
+const formatEUR = (n) =>
+  new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(n || 0);
+
+const emptyFigures = () => ({ assurance: 0, PAT: 0, OCA: 0, BPR: 0, MP7: 0, AUG: 0, DIM: 0 });
 
 async function loadShared(key, fallback) {
   try {
@@ -54,7 +57,7 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [members, setMembers] = useState([]);
   const [entries, setEntries] = useState([]);
-  const [figures, setFigures] = useState({}); // { [monthKey]: { [memberId]: {assurance,PAT,OCA,BPR,MP7} } }
+  const [figures, setFigures] = useState({}); // { [monthKey]: { [memberId]: {assurance, ...CREDIT_TYPES} } }
   const [session, setSession] = useState(null); // {id, name, email, role}
   const [tab, setTab] = useState("saisie");
   const [toast, setToast] = useState(null);
@@ -477,6 +480,7 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
   const [type, setType] = useState("assurance");
   const [creditType, setCreditType] = useState("PAT");
   const [dossier, setDossier] = useState("");
+  const [montant, setMontant] = useState("");
   const [date, setDate] = useState(todayISO());
 
   const myEntries = useMemo(
@@ -497,12 +501,14 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
       type,
       creditType: type === "credit" ? creditType : null,
       dossier: dossier.trim(),
+      montant: Number(montant) || 0,
       date,
       createdAt: new Date().toISOString(),
     };
     const ok = await setEntries([entry, ...entries]);
     if (ok) {
       setDossier("");
+      setMontant("");
       notify(type === "assurance" ? "Assurance enregistrée." : `Crédit ${creditType} enregistré.`);
     }
   };
@@ -512,6 +518,7 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
   };
 
   const countAssurance = myEntries.filter((e) => e.type === "assurance").length;
+  const montantTotal = myEntries.reduce((s, e) => s + (e.montant || 0), 0);
   const countCredit = myEntries.filter((e) => e.type === "credit").length;
 
   return (
@@ -532,7 +539,7 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
 
           {type === "credit" && (
             <Field label="Type de crédit">
-              <div className="grid grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-3 gap-1.5">
                 {CREDIT_TYPES.map((ct) => (
                   <button
                     key={ct}
@@ -561,6 +568,27 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
             />
           </Field>
 
+          <Field label="Montant vendu">
+            <div className="relative">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={montant}
+                onChange={(e) => setMontant(e.target.value)}
+                placeholder="0,00"
+                className="w-full pl-3.5 pr-8 py-2.5 rounded-lg text-sm"
+                style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
+              />
+              <span
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-sm"
+                style={{ color: THEME.navySoft }}
+              >
+                €
+              </span>
+            </div>
+          </Field>
+
           <Field label="Date">
             <input
               type="date"
@@ -585,6 +613,14 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
         <div className="grid grid-cols-2 gap-3 mb-4">
           <StatCard icon={Shield} label="Assurances ce mois" value={countAssurance} color={THEME.teal} />
           <StatCard icon={CreditCard} label="Crédits ce mois" value={countCredit} color={THEME.amber} />
+          <div className="col-span-2 rounded-2xl p-4" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+            <span className="block text-xs font-medium mb-2" style={{ color: THEME.navySoft }}>
+              Montant total vendu ce mois
+            </span>
+            <div style={{ fontFamily: FONT_DISPLAY, color: THEME.navy }} className="text-3xl font-semibold">
+              {formatEUR(montantTotal)}
+            </div>
+          </div>
         </div>
 
         <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
@@ -616,9 +652,14 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
                       </div>
                     </div>
                   </div>
-                  <button onClick={() => remove(e.id)} className="p-1.5 rounded-md flex-shrink-0" aria-label="Supprimer">
-                    <Trash2 size={14} style={{ color: THEME.red }} />
-                  </button>
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <span className="font-medium" style={{ color: THEME.navy }}>
+                      {formatEUR(e.montant)}
+                    </span>
+                    <button onClick={() => remove(e.id)} className="p-1.5 rounded-md" aria-label="Supprimer">
+                      <Trash2 size={14} style={{ color: THEME.red }} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -704,21 +745,20 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
     const rows = collaborators.map((m) => {
       const f = monthFigures[m.id] || emptyFigures();
       const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (f[ct] || 0), 0);
-      const declaredCount = entries.filter(
+      const declared = entries.filter(
         (e) => e.personId === m.id && e.date.slice(0, 7) === mKey
-      ).length;
+      );
+      const montantTotal = declared.reduce((s, e) => s + (e.montant || 0), 0);
       return {
         "Collaborateur": m.name,
         "E-mail": m.email,
         "Assurances": f.assurance || 0,
         "Objectif assurances": m.objectifAssurance ?? 5,
-        "PAT": f.PAT || 0,
-        "OCA": f.OCA || 0,
-        "BPR": f.BPR || 0,
-        "MP7": f.MP7 || 0,
+        ...Object.fromEntries(CREDIT_TYPES.map((ct) => [ct, f[ct] || 0])),
         "Total crédits": creditTotal,
         "Objectif crédits": m.objectifCredit ?? 5,
-        "Dossiers déclarés (journal)": declaredCount,
+        "Montant total vendu (journal)": montantTotal,
+        "Dossiers déclarés (journal)": declared.length,
       };
     });
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -820,7 +860,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                 <div className="text-xs font-medium mb-2" style={{ color: THEME.navySoft }}>
                   Détail des crédits financés par type
                 </div>
-                <div className="grid grid-cols-4 gap-2 mb-4">
+                <div className="grid grid-cols-3 gap-2 mb-4">
                   {CREDIT_TYPES.map((ct) => (
                     <label key={ct} className="block">
                       <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{ct}</span>
@@ -862,9 +902,12 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                   </summary>
                   <div className="mt-2 space-y-1.5">
                     {declared.map((e) => (
-                      <div key={e.id} className="text-xs flex justify-between px-3 py-2 rounded-lg" style={{ background: THEME.bg }}>
+                      <div key={e.id} className="text-xs flex justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: THEME.bg }}>
                         <span>{e.type === "assurance" ? "Assurance" : `Crédit ${e.creditType}`} — {e.dossier}</span>
-                        <span style={{ color: THEME.navySoft }}>{new Date(e.date).toLocaleDateString("fr-FR")}</span>
+                        <span className="flex items-center gap-2 flex-shrink-0">
+                          <span className="font-medium" style={{ color: THEME.navy }}>{formatEUR(e.montant)}</span>
+                          <span style={{ color: THEME.navySoft }}>{new Date(e.date).toLocaleDateString("fr-FR")}</span>
+                        </span>
                       </div>
                     ))}
                   </div>
