@@ -254,6 +254,11 @@ const THEME = {
   card: "#FFFFFF",
   line: "#E3E7EC",
 };
+// Accent distinct pour l'interface responsable (nav, boutons d'action
+// manager) — permet de voir d'un coup d'œil dans quel mode on est,
+// sans toucher aux couleurs sémantiques des métriques (teal/ambre).
+const MANAGER_ACCENT = "#6B4FA0";
+const MANAGER_ACCENT_SOFT = "#EAE3F5";
 const FONT_DISPLAY = "'Space Grotesk', sans-serif";
 const FONT_BODY = "'Inter', sans-serif";
 
@@ -354,8 +359,8 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
               onClick={() => { setMode("manager"); setError(""); }}
               className="flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-1.5"
               style={{
-                color: mode === "manager" ? THEME.teal : THEME.navySoft,
-                borderBottom: mode === "manager" ? `2px solid ${THEME.teal}` : "2px solid transparent",
+                color: mode === "manager" ? MANAGER_ACCENT : THEME.navySoft,
+                borderBottom: mode === "manager" ? `2px solid ${MANAGER_ACCENT}` : "2px solid transparent",
               }}
             >
               <Lock size={13} /> Responsable
@@ -430,12 +435,14 @@ function Field({ label, children }) {
 /* ---------------- MAIN APP ---------------- */
 function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, setFigures, deletionHistory, recordDeletion, tab, setTab, mKey, notify }) {
   const isManager = session.role === "responsable";
+  const accent = isManager ? MANAGER_ACCENT : THEME.teal;
+  const accentSoft = isManager ? MANAGER_ACCENT_SOFT : THEME.tealSoft;
 
   return (
     <div>
       <header
         className="sticky top-0 z-20 px-5 py-4 flex items-center justify-between"
-        style={{ background: THEME.card, borderBottom: `1px solid ${THEME.line}` }}
+        style={{ background: THEME.card, borderBottom: `3px solid ${accent}` }}
       >
         <div>
           <div style={{ fontFamily: FONT_DISPLAY }} className="text-base font-semibold" >
@@ -446,7 +453,10 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
         <div className="flex items-center gap-3">
           <div className="text-right hidden sm:block">
             <div className="text-sm font-medium">{session.name}</div>
-            <div className="text-xs" style={{ color: THEME.navySoft }}>
+            <div
+              className="text-xs font-medium inline-block px-2 py-0.5 rounded-full"
+              style={{ color: accent, background: accentSoft }}
+            >
               {isManager ? "Responsable" : "Collaborateur"}
             </div>
           </div>
@@ -462,19 +472,19 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
       </header>
 
       <nav className="flex gap-1 px-5 pt-4 max-w-5xl mx-auto">
-        <TabButton active={tab === "saisie"} onClick={() => setTab("saisie")} icon={ClipboardList}>
+        <TabButton active={tab === "saisie"} onClick={() => setTab("saisie")} icon={ClipboardList} accent={accent}>
           Ma saisie
         </TabButton>
-        <TabButton active={tab === "suivi"} onClick={() => setTab("suivi")} icon={Award}>
+        <TabButton active={tab === "suivi"} onClick={() => setTab("suivi")} icon={Award} accent={accent}>
           Suivi & objectifs
         </TabButton>
         {isManager && (
-          <TabButton active={tab === "equipe"} onClick={() => setTab("equipe")} icon={Users}>
+          <TabButton active={tab === "equipe"} onClick={() => setTab("equipe")} icon={Users} accent={accent}>
             Équipe
           </TabButton>
         )}
         {isManager && (
-          <TabButton active={tab === "historique"} onClick={() => setTab("historique")} icon={History}>
+          <TabButton active={tab === "historique"} onClick={() => setTab("historique")} icon={History} accent={accent}>
             Historique
           </TabButton>
         )}
@@ -515,15 +525,15 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
   );
 }
 
-function TabButton({ active, onClick, icon: Icon, children }) {
+function TabButton({ active, onClick, icon: Icon, children, accent = THEME.teal }) {
   return (
     <button
       onClick={onClick}
       className="flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg text-sm font-medium transition-colors"
       style={{
-        color: active ? THEME.teal : THEME.navySoft,
+        color: active ? accent : THEME.navySoft,
         background: active ? THEME.card : "transparent",
-        borderBottom: active ? `2px solid ${THEME.teal}` : "2px solid transparent",
+        borderBottom: active ? `2px solid ${accent}` : "2px solid transparent",
       }}
     >
       <Icon size={15} /> {children}
@@ -1006,7 +1016,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
           <button
             onClick={exportExcel}
             className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-opacity hover:opacity-90"
-            style={{ background: THEME.teal, color: "#fff" }}
+            style={{ background: MANAGER_ACCENT, color: "#fff" }}
           >
             <Download size={14} /> Exporter en Excel
           </button>
@@ -1056,7 +1066,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
             label={`Appliquer à tous les collaborateurs (${collaborators.length})`}
             confirmLabel="Confirmer"
             icon={Users}
-            color={THEME.teal}
+            color={MANAGER_ACCENT}
             iconOnly={false}
           />
         </div>
@@ -1095,7 +1105,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                 <button
                   onClick={() => startEdit(member)}
                   className="text-xs font-medium px-3 py-1.5 rounded-lg"
-                  style={{ background: THEME.bg, color: THEME.teal }}
+                  style={{ background: THEME.bg, color: MANAGER_ACCENT }}
                 >
                   Mettre à jour
                 </button>
@@ -1170,7 +1180,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                   <button
                     onClick={() => saveEdit(member)}
                     className="flex-1 py-2 rounded-lg text-sm font-semibold text-white"
-                    style={{ background: THEME.teal }}
+                    style={{ background: MANAGER_ACCENT }}
                   >
                     Enregistrer les chiffres
                   </button>
@@ -1284,7 +1294,7 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify }) {
     <div className="space-y-5">
       <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
         <h2 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
-          <Users size={15} style={{ color: THEME.teal }} /> Collaborateurs ({collaborators.length})
+          <Users size={15} style={{ color: MANAGER_ACCENT }} /> Collaborateurs ({collaborators.length})
         </h2>
         {collaborators.length === 0 ? (
           <p className="text-sm py-4" style={{ color: THEME.navySoft }}>
@@ -1360,7 +1370,7 @@ function HistoriqueTab({ deletionHistory }) {
   return (
     <div className="space-y-5">
       <div className="rounded-2xl p-4 flex items-center gap-3" style={{ background: THEME.navy, color: "#fff" }}>
-        <History size={18} style={{ color: THEME.teal }} />
+        <History size={18} style={{ color: MANAGER_ACCENT }} />
         <div className="text-sm">
           <span className="font-semibold">{deletionHistory.length}</span> suppression{deletionHistory.length !== 1 ? "s" : ""} enregistrée{deletionHistory.length !== 1 ? "s" : ""} au total
         </div>
