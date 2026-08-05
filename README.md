@@ -89,6 +89,8 @@ Contrairement aux assurances (déclarées par les collaborateurs et comptabilis�
 
 Le total "Crédits (total)" et le détail par type qu'on voit ailleurs dans l'app (export Excel compris) sont la somme de toutes ces saisies quotidiennes du mois consulté — plus, le cas échéant, un chiffre "historique" antérieur à cette fonctionnalité (jamais perdu, jamais réécrit, simplement additionné une fois pour toutes).
 
+Pour **PAT** et **BPR**, la saisie du jour se scinde en **Papier** et **eDirect** (comme le type de contrat déjà distingué côté collaborateur dans "Ma saisie") : deux paires nombre/montant distinctes, stockées comme deux enregistrements séparés mais additionnées ensemble dans le total du type.
+
 ## Comptes
 
 - **Collaborateur** : la création d'un compte se fait uniquement par **invitation** — voir ci-dessous. Une fois le compte créé, la connexion se fait ensuite par simple nom + e-mail (comme avant).

@@ -69,8 +69,18 @@ const emptyObjByType = () => ({
   credit: Object.fromEntries(CREDIT_TYPES.map((t) => [t, 0])),
 });
 // Saisie quotidienne du responsable : pour chaque type de crédit, le nombre
-// de dossiers financés et le montant total financé ce jour-là.
-const emptyCreditDraft = () => Object.fromEntries(CREDIT_TYPES.map((t) => [t, { nombre: 0, montant: 0 }]));
+// de dossiers financés et le montant total financé ce jour-là. Pour PAT et
+// BPR, la saisie se scinde en Papier / eDirect (comme dans "Ma saisie").
+const emptyCreditTypeEntry = () => ({ nombre: 0, montant: 0 });
+const emptyCreditDraft = () =>
+  Object.fromEntries(
+    CREDIT_TYPES.map((t) => [
+      t,
+      CONTRACT_MODE_CREDIT_TYPES.includes(t)
+        ? Object.fromEntries(CONTRACT_MODES.map((m) => [m, emptyCreditTypeEntry()]))
+        : emptyCreditTypeEntry(),
+    ])
+  );
 
 // --- Découpage temporel pour le graphique de performance (Suivi & objectifs) ---
 // Chaque granularité produit une liste fixe de "buckets" (bornes [début,fin]
@@ -1644,15 +1654,21 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
     if (ok) notify(`Objectifs généraux appliqués à ${collaborators.length} collaborateur(s).`);
   };
 
-  // Recharge la saisie du jour (nombre + montant par type de crédit) déjà
-  // enregistrée pour ce collaborateur à cette date, s'il y en a une — pour
-  // corriger une journée sans créer de doublon.
+  // Recharge la saisie du jour (nombre + montant par type de crédit, et par
+  // mode de contrat Papier/eDirect pour PAT/BPR) déjà enregistrée pour ce
+  // collaborateur à cette date, s'il y en a une — pour corriger une
+  // journée sans créer de doublon.
   const loadCreditDraftFor = (memberId, date) => {
     const draft = emptyCreditDraft();
     creditRecords
       .filter((r) => r.memberId === memberId && r.date === date)
       .forEach((r) => {
-        draft[r.creditType] = { nombre: r.nombre, montant: r.montant };
+        const entry = { nombre: r.nombre, montant: r.montant };
+        if (CONTRACT_MODE_CREDIT_TYPES.includes(r.creditType) && r.contractMode) {
+          draft[r.creditType][r.contractMode] = entry;
+        } else {
+          draft[r.creditType] = entry;
+        }
       });
     return draft;
   };
@@ -1701,23 +1717,50 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
 
   // Remplace (upsert) la saisie de crédits financés du jour choisi pour ce
   // collaborateur : les enregistrements existants pour ce jour sont
-  // écrasés par la nouvelle saisie (un type à 0/0 est simplement retiré).
+  // écrasés par la nouvelle saisie (une entrée à 0/0 est simplement
+  // retirée). PAT et BPR produisent jusqu'à 2 enregistrements (Papier +
+  // eDirect), les autres types un seul.
   const saveCreditRecords = async (member) => {
     const others = creditRecords.filter((r) => !(r.memberId === member.id && r.date === creditDate));
-    const additions = CREDIT_TYPES.filter(
-      (ct) => (creditDraft[ct].nombre || 0) > 0 || (creditDraft[ct].montant || 0) > 0
-    ).map((ct) => ({
-      id: uid(),
+    const baseRecord = {
+      id: undefined,
       memberId: member.id,
       date: creditDate,
-      creditType: ct,
-      nombre: Number(creditDraft[ct].nombre) || 0,
-      montant: Number(creditDraft[ct].montant) || 0,
       recordedBy: { id: session.id, name: session.name },
       recordedAt: new Date().toISOString(),
-    }));
+    };
+    const additions = [];
+    CREDIT_TYPES.forEach((ct) => {
+      if (CONTRACT_MODE_CREDIT_TYPES.includes(ct)) {
+        CONTRACT_MODES.forEach((mode) => {
+          const entry = creditDraft[ct][mode];
+          if ((entry.nombre || 0) > 0 || (entry.montant || 0) > 0) {
+            additions.push({
+              ...baseRecord,
+              id: uid(),
+              creditType: ct,
+              contractMode: mode,
+              nombre: Number(entry.nombre) || 0,
+              montant: Number(entry.montant) || 0,
+            });
+          }
+        });
+      } else {
+        const entry = creditDraft[ct];
+        if ((entry.nombre || 0) > 0 || (entry.montant || 0) > 0) {
+          additions.push({
+            ...baseRecord,
+            id: uid(),
+            creditType: ct,
+            contractMode: null,
+            nombre: Number(entry.nombre) || 0,
+            montant: Number(entry.montant) || 0,
+          });
+        }
+      }
+    });
     const ok = await setCreditRecords([...additions, ...others]);
-    if (ok) notify(`Crédits enregistrés pour le ${new Date(creditDate).toLocaleDateString("fr-FR")} — ${member.name}`);
+    if (ok) notify(`Crédits enregistrés pour le ${new Date(creditDate + "T00:00:00").toLocaleDateString("fr-FR")} — ${member.name}`);
   };
 
   const visibleMembers = isManager ? collaborators : collaborators.filter((m) => m.id === session.id);
@@ -1998,39 +2041,86 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
                     />
                   </label>
                   <div className="grid sm:grid-cols-2 gap-2 mb-3">
-                    {CREDIT_TYPES.map((ct) => (
-                      <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
-                        <div className="text-xs font-semibold mb-1.5">{ct}</div>
-                        <div className="grid grid-cols-2 gap-2">
-                          <label className="block">
-                            <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Nombre</span>
-                            <input
-                              type="number"
-                              min="0"
-                              value={creditDraft[ct].nombre}
-                              onChange={(e) =>
-                                setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], nombre: Number(e.target.value) || 0 } }))
-                              }
-                              className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
-                              style={{ border: `1px solid ${THEME.line}` }}
-                            />
-                          </label>
-                          <label className="block">
-                            <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Montant (€)</span>
-                            <input
-                              type="number"
-                              min="0"
-                              value={creditDraft[ct].montant}
-                              onChange={(e) =>
-                                setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], montant: Number(e.target.value) || 0 } }))
-                              }
-                              className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
-                              style={{ border: `1px solid ${THEME.line}` }}
-                            />
-                          </label>
+                    {CREDIT_TYPES.map((ct) =>
+                      CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? (
+                        <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
+                          <div className="text-xs font-semibold mb-2">{ct}</div>
+                          <div className="space-y-2">
+                            {CONTRACT_MODES.map((mode) => (
+                              <div key={mode}>
+                                <div className="text-[10px] font-medium mb-1" style={{ color: THEME.navySoft }}>{mode}</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <label className="block">
+                                    <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Nombre</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={creditDraft[ct][mode].nombre}
+                                      onChange={(e) =>
+                                        setCreditDraft((d) => ({
+                                          ...d,
+                                          [ct]: { ...d[ct], [mode]: { ...d[ct][mode], nombre: Number(e.target.value) || 0 } },
+                                        }))
+                                      }
+                                      className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
+                                      style={{ border: `1px solid ${THEME.line}` }}
+                                    />
+                                  </label>
+                                  <label className="block">
+                                    <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Montant (€)</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={creditDraft[ct][mode].montant}
+                                      onChange={(e) =>
+                                        setCreditDraft((d) => ({
+                                          ...d,
+                                          [ct]: { ...d[ct], [mode]: { ...d[ct][mode], montant: Number(e.target.value) || 0 } },
+                                        }))
+                                      }
+                                      className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
+                                      style={{ border: `1px solid ${THEME.line}` }}
+                                    />
+                                  </label>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ) : (
+                        <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
+                          <div className="text-xs font-semibold mb-1.5">{ct}</div>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="block">
+                              <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Nombre</span>
+                              <input
+                                type="number"
+                                min="0"
+                                value={creditDraft[ct].nombre}
+                                onChange={(e) =>
+                                  setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], nombre: Number(e.target.value) || 0 } }))
+                                }
+                                className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
+                                style={{ border: `1px solid ${THEME.line}` }}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Montant (€)</span>
+                              <input
+                                type="number"
+                                min="0"
+                                value={creditDraft[ct].montant}
+                                onChange={(e) =>
+                                  setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], montant: Number(e.target.value) || 0 } }))
+                                }
+                                className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
+                                style={{ border: `1px solid ${THEME.line}` }}
+                              />
+                            </label>
+                          </div>
+                        </div>
+                      )
+                    )}
                   </div>
                   <button
                     onClick={() => saveCreditRecords(member)}
