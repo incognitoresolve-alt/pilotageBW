@@ -4,49 +4,45 @@ Application de suivi commercial (assurances & crédits) pour une équipe : saisi
 
 ## Démarrage (développement)
 
-Deux processus : le backend (API + stockage) et le frontend (Vite).
-
 ```bash
 npm install
-
-# terminal 1 — backend, sur le port 4000
-npm run server
-
-# terminal 2 — frontend, sur le port 5173 (proxy /api vers le backend)
-npm run dev
+npm run pages:dev
 ```
 
-L'application est disponible sur http://localhost:5173.
-
-## Build & lancement en production
-
-Un seul process Node sert à la fois l'API et les fichiers statiques buildés :
-
-```bash
-npm run build
-npm run server
-# ou : npm start (build + server en une commande)
-```
-
-L'application est alors disponible sur http://localhost:4000 (port configurable via la variable d'environnement `PORT`).
+`pages:dev` lance Vite (avec hot-reload) et Wrangler en local par-dessus, avec l'API (`functions/api/`) branchée sur du KV simulé localement — aucun compte Cloudflare requis pour développer. L'application est disponible sur l'URL affichée par Wrangler (en général http://localhost:8788).
 
 ## Stack
 
 - React + Vite
 - Tailwind CSS
 - lucide-react (icônes)
-- Express (backend minimal)
+- Cloudflare Pages Functions + KV (backend)
 - xlsx / SheetJS (export Excel)
 
 ## Backend
 
-Le backend (`server/index.js`) est volontairement minimal : un serveur Express qui expose une API clé/valeur (`GET/PUT /api/storage/:key`) et persiste les données dans un fichier JSON (`server/data.json`, créé automatiquement, jamais commité). C'est là que sont stockés les membres, les ventes déclarées et les chiffres officiels du mois — partagés par tous les utilisateurs, quel que soit leur navigateur ou appareil.
+Le backend (`functions/api/storage/[key].js`) est une Cloudflare Pages Function : elle expose une API clé/valeur (`GET/PUT /api/storage/:key`) et persiste les données dans un namespace **Cloudflare KV**. C'est là que sont stockés les membres, les ventes déclarées et les chiffres officiels du mois — partagés par tous les utilisateurs, quel que soit leur navigateur ou appareil, sans serveur à gérer.
 
 Le "dernier compte connecté" (pour l'auto-login) reste dans le `localStorage` du navigateur : c'est une préférence locale à l'appareil, elle n'a pas besoin d'être partagée.
 
-**Limites** : stockage fichier (pas de vraie base de données, pas de gestion de concurrence avancée), pas d'authentification par mot de passe (le code responsable protège seulement la mise à jour des chiffres officiels), pas de sauvegardes automatiques. Suffisant pour une petite équipe ; pour aller plus loin, remplacer `server/index.js` par une vraie base (Postgres/SQLite) ou un service managé (Supabase, Firebase...).
+**Limites** : KV est une base clé/valeur "eventually consistent" (propagation globale en quelques dizaines de secondes dans le pire cas) — largement suffisant pour une saisie occasionnelle en équipe, mais pas fait pour de l'écriture concurrente à haute fréquence. Pas d'authentification par mot de passe (le code responsable protège seulement la mise à jour des chiffres officiels). Pour aller plus loin, remplacer le binding KV par **Cloudflare D1** (SQLite managé, cohérence forte) dans `functions/api/storage/[key].js`.
 
-**Déploiement** : `server/data.json` doit être sur un disque persistant (pas un environnement éphémère/serverless qui réinitialise le système de fichiers à chaque déploiement), sans quoi les données seraient perdues.
+## Déploiement sur Cloudflare
+
+1. **Créer le namespace KV** (une seule fois) :
+   ```bash
+   npx wrangler login
+   npx wrangler kv namespace create STORAGE_KV
+   ```
+   Copier l'`id` retourné dans `wrangler.toml` (remplace `REMPLACER_PAR_L_ID_DU_NAMESPACE_KV`).
+
+2. **Déployer** :
+   ```bash
+   npm run deploy
+   ```
+   Ceci build le frontend (`vite build`) puis publie `dist/` + les functions via `wrangler pages deploy`.
+
+   Alternative recommandée pour les déploiements automatiques : connecter le repo GitHub directement à un projet **Cloudflare Pages** depuis le dashboard Cloudflare (Workers & Pages → Create → Pages → Connect to Git). Renseigner la commande de build `npm run build` et le dossier de sortie `dist`, puis lier le namespace KV au projet dans Settings → Functions → KV namespace bindings (nom du binding : `STORAGE_KV`). Chaque push sur la branche configurée redéploie automatiquement.
 
 ## Export Excel
 

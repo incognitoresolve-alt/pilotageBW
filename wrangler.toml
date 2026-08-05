@@ -1,0 +1,9 @@
+name = "suivi-commercial"
+pages_build_output_dir = "dist"
+compatibility_date = "2024-09-23"
+
+# Créé avec `wrangler kv namespace create STORAGE_KV`, puis coller l'id
+# retourné ci-dessous (voir README > Déploiement sur Cloudflare).
+[[kv_namespaces]]
+binding = "STORAGE_KV"
+id = "REMPLACER_PAR_L_ID_DU_NAMESPACE_KV"
