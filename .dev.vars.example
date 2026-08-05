@@ -1,3 +1,0 @@
-# Copier ce fichier en .dev.vars et choisir une valeur (même valeur que
-# VITE_APP_SECRET dans .env.local — voir README > Sécurité).
-APP_SECRET=change-moi

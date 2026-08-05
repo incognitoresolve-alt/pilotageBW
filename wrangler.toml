@@ -10,3 +10,11 @@ not_found_handling = "single-page-application"
 [[kv_namespaces]]
 binding = "STORAGE_KV"
 id = "0dd4bdb5eaa345f190605693ea883e25"
+
+# Pas un vrai secret : sa valeur finit de toute façon en clair dans le
+# bundle JS public via VITE_APP_SECRET (même valeur, à définir côté
+# dashboard Cloudflare comme variable de build). Sert uniquement à
+# fermer l'accès direct à l'API pour un visiteur non passé par
+# l'application — voir README > Sécurité.
+[vars]
+APP_SECRET = "3141ac7198c6187c079a95af77e482668952eacc1e1941b9"
