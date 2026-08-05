@@ -1295,10 +1295,13 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
         (e) => e.personId === m.id && e.date.slice(0, 7) === viewMonth
       );
       const montantTotal = declared.reduce((s, e) => s + (e.montant || 0), 0);
+      const assuranceTotal = declared
+        .filter((e) => e.type === "assurance")
+        .reduce((s, e) => s + (e.quantite || 1), 0);
       return {
         "Collaborateur": m.name,
         "E-mail": m.email,
-        "Assurances": f.assurance || 0,
+        "Assurances": assuranceTotal,
         "Objectif assurances": m.objectifAssurance ?? 5,
         ...Object.fromEntries(CREDIT_TYPES.map((ct) => [ct, f[ct] || 0])),
         "Total crédits": creditTotal,
@@ -1433,12 +1436,12 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
         const objA = member.objectifAssurance ?? 5;
         const objC = member.objectifCredit ?? 5;
         const objM = member.objectifMontant ?? 5000;
-        const resteA = Math.max(0, objA - (f.assurance || 0));
         const resteC = Math.max(0, objC - creditTotal);
         const declared = entries.filter((e) => e.personId === member.id && e.date.slice(0, 7) === viewMonth);
-        // Le montant vendu vient directement du journal déclaré (pas des
-        // chiffres officiels saisis à la main) : il reflète en temps réel
-        // ce que le collaborateur a déclaré.
+        // Le montant vendu et le nombre d'assurances vendues viennent
+        // directement du journal déclaré (pas d'un chiffre saisi à la
+        // main) : ils reflètent en temps réel ce que le collaborateur a
+        // déclaré dans "Ma saisie", quel que soit le type d'assurance.
         const montantRealise = declared.reduce((s, e) => s + (e.montant || 0), 0);
         const resteM = Math.max(0, objM - montantRealise);
         const isEditing = editing === member.id;
@@ -1458,6 +1461,8 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
             declared.filter((e) => e.type === "credit" && e.creditType === ct).reduce((s, e) => s + (e.montant || 0), 0),
           ])
         );
+        const assuranceRealise = ASSURANCE_TYPES.reduce((s, at) => s + (assuranceRealiseParType[at] || 0), 0);
+        const resteA = Math.max(0, objA - assuranceRealise);
         const objectifsAssuranceParType = member.objectifsAssuranceParType || {};
         const objectifsCreditParType = member.objectifsCreditParType || {};
         const hasProduitObjectifs =
@@ -1486,16 +1491,15 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
               <ProgressBlock
                 icon={Shield}
                 label="Assurances"
-                value={f.assurance || 0}
+                value={assuranceRealise}
                 objective={objA}
                 reste={resteA}
                 color={THEME.teal}
                 colorSoft={THEME.tealSoft}
                 editing={isEditing}
-                onChangeValue={(v) => setDraft((d) => ({ ...d, assurance: v }))}
                 onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifAssurance: v }))}
-                draftValue={draft.assurance}
                 draftObjective={objDraft.objectifAssurance}
+                readOnlyValue
               />
               <ProgressBlock
                 icon={CreditCard}
