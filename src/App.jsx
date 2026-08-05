@@ -257,8 +257,8 @@ const THEME = {
 // Accent distinct pour l'interface responsable (nav, boutons d'action
 // manager) — permet de voir d'un coup d'œil dans quel mode on est,
 // sans toucher aux couleurs sémantiques des métriques (teal/ambre).
-const MANAGER_ACCENT = "#6B4FA0";
-const MANAGER_ACCENT_SOFT = "#EAE3F5";
+const MANAGER_ACCENT = "#7A1F3D";
+const MANAGER_ACCENT_SOFT = "#F3E1E7";
 const FONT_DISPLAY = "'Space Grotesk', sans-serif";
 const FONT_BODY = "'Inter', sans-serif";
 
