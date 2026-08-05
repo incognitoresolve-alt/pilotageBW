@@ -11,6 +11,16 @@
 // pour un visiteur ou un robot qui découvrirait l'URL sans passer par
 // l'application.
 
+// APP_SECRET peut être lié soit comme une simple variable/secret
+// classique (chaîne directement), soit comme un binding "Secrets
+// Store" Cloudflare (objet exposant une méthode .get() asynchrone) —
+// on gère les deux formes.
+async function resolveSecret(binding) {
+  if (typeof binding === "string") return binding;
+  if (binding && typeof binding.get === "function") return await binding.get();
+  return "";
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -18,7 +28,7 @@ export default {
 
     if (match) {
       const clientSecret = request.headers.get("X-App-Secret") || "";
-      const serverSecret = env.APP_SECRET || "";
+      const serverSecret = (await resolveSecret(env.APP_SECRET)) || "";
       if (clientSecret !== serverSecret) {
         // Diagnostic minimal (longueurs uniquement, jamais les valeurs) pour
         // distinguer "APP_SECRET absent côté Worker" de "VITE_APP_SECRET
