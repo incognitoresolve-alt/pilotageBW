@@ -7,8 +7,6 @@ directory = "dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 
-# Créé avec `wrangler kv namespace create STORAGE_KV`, puis coller l'id
-# retourné ci-dessous (voir README > Déploiement sur Cloudflare).
 [[kv_namespaces]]
 binding = "STORAGE_KV"
-id = "REMPLACER_PAR_L_ID_DU_NAMESPACE_KV"
+id = "0dd4bdb5eaa345f190605693ea883e25"
