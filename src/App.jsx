@@ -2,8 +2,9 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Shield, CreditCard, Users, LogOut, Plus, Trash2, CheckCircle2,
   Calendar, Settings, ChevronRight, Lock, TrendingUp, ClipboardList,
-  AlertCircle, Award, X
+  AlertCircle, Award, X, Download
 } from "lucide-react";
+import * as XLSX from "xlsx";
 
 const CREDIT_TYPES = ["PAT", "OCA", "BPR", "MP7"];
 const MANAGER_CODE = "OVB2026";
@@ -663,15 +664,55 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
 
   const visibleMembers = isManager ? collaborators : collaborators.filter((m) => m.id === session.id);
 
+  const exportExcel = () => {
+    const rows = collaborators.map((m) => {
+      const f = monthFigures[m.id] || emptyFigures();
+      const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (f[ct] || 0), 0);
+      const declaredCount = entries.filter(
+        (e) => e.personId === m.id && e.date.slice(0, 7) === mKey
+      ).length;
+      return {
+        "Collaborateur": m.name,
+        "E-mail": m.email,
+        "Assurances": f.assurance || 0,
+        "Objectif assurances": m.objectifAssurance ?? 5,
+        "PAT": f.PAT || 0,
+        "OCA": f.OCA || 0,
+        "BPR": f.BPR || 0,
+        "MP7": f.MP7 || 0,
+        "Total crédits": creditTotal,
+        "Objectif crédits": m.objectifCredit ?? 5,
+        "Dossiers déclarés (journal)": declaredCount,
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = Object.keys(rows[0] || {}).map(() => ({ wch: 20 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Chiffres du mois");
+    XLSX.writeFile(wb, `suivi-commercial-${mKey}.xlsx`);
+    notify("Export Excel généré.");
+  };
+
   return (
     <div className="space-y-5">
-      <div className="rounded-2xl p-4 flex items-center gap-3" style={{ background: THEME.navy, color: "#fff" }}>
-        <Calendar size={18} style={{ color: THEME.teal }} />
-        <div className="text-sm">
-          <span className="font-semibold">{daysLeft}</span> jour{daysLeft > 1 ? "s" : ""} restant{daysLeft > 1 ? "s" : ""} avant la fin du mois
-          {" — "}
-          <span className="capitalize">{monthLabel()}</span>
+      <div className="rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap" style={{ background: THEME.navy, color: "#fff" }}>
+        <div className="flex items-center gap-3">
+          <Calendar size={18} style={{ color: THEME.teal }} />
+          <div className="text-sm">
+            <span className="font-semibold">{daysLeft}</span> jour{daysLeft > 1 ? "s" : ""} restant{daysLeft > 1 ? "s" : ""} avant la fin du mois
+            {" — "}
+            <span className="capitalize">{monthLabel()}</span>
+          </div>
         </div>
+        {isManager && collaborators.length > 0 && (
+          <button
+            onClick={exportExcel}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-opacity hover:opacity-90"
+            style={{ background: THEME.teal, color: "#fff" }}
+          >
+            <Download size={14} /> Exporter en Excel
+          </button>
+        )}
       </div>
 
       {visibleMembers.length === 0 && (

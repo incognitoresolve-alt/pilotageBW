@@ -1,22 +1,38 @@
 // Shim for the `window.storage` key/value API the app was originally
-// prototyped against. There is no backend here, so both the "shared"
-// and "local" namespaces are persisted to the browser's localStorage —
-// data stays on the device it was entered on, it is not synced between
-// users. Swap this module for a real backend client to get true
-// multi-device sharing.
+// prototyped against. "Shared" data (members, entries, figures) is read
+// from and written to the backend in server/, so it's the same for
+// every user. "Local" data (the last-used session, for auto-login on
+// this device) stays in the browser's localStorage — it's a per-device
+// convenience, not something that should sync.
 const PREFIX = "suivi-commercial";
+const API_BASE = "/api/storage";
 
-function fullKey(key, shared) {
-  return `${PREFIX}:${shared ? "shared" : "local"}:${key}`;
+function localKey(key) {
+  return `${PREFIX}:local:${key}`;
 }
 
 async function get(key, shared) {
-  const raw = window.localStorage.getItem(fullKey(key, shared));
+  if (shared) {
+    const res = await fetch(`${API_BASE}/${encodeURIComponent(key)}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`GET ${key} failed: ${res.status}`);
+    return res.json();
+  }
+  const raw = window.localStorage.getItem(localKey(key));
   return raw === null ? null : { value: raw };
 }
 
 async function set(key, value, shared) {
-  window.localStorage.setItem(fullKey(key, shared), value);
+  if (shared) {
+    const res = await fetch(`${API_BASE}/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    });
+    if (!res.ok) throw new Error(`PUT ${key} failed: ${res.status}`);
+    return;
+  }
+  window.localStorage.setItem(localKey(key), value);
 }
 
 if (typeof window !== "undefined" && !window.storage) {
