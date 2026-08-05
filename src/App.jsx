@@ -5,6 +5,7 @@ import {
   AlertCircle, Award, X, Download, Euro, History, RotateCcw, Pencil
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import { verifyManagerCode } from "./lib/storage";
 
 const CREDIT_TYPES = ["PAT", "OCA", "BPR", "MP7", "AUG", "DIM"];
 const ASSURANCE_TYPES = ["ALLIN", "DIMC", "DIM"];
@@ -12,7 +13,6 @@ const ASSURANCE_TYPES = ["ALLIN", "DIMC", "DIM"];
 // en papier ou via eDirect.
 const CONTRACT_MODES = ["Papier", "eDirect"];
 const CONTRACT_MODE_CREDIT_TYPES = ["PAT", "BPR"];
-const MANAGER_CODE = "RESPONSABLE2026";
 
 const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 const todayISO = () => new Date().toISOString().slice(0, 10);
@@ -337,7 +337,8 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
     setError("");
     const em = email.trim().toLowerCase();
     if (!em || !name.trim()) return setError("Renseignez votre nom et votre e-mail professionnel.");
-    if (code !== MANAGER_CODE) return setError("Code d'accès responsable incorrect.");
+    const valid = await verifyManagerCode(code);
+    if (!valid) return setError("Code d'accès responsable incorrect (ou connexion au serveur impossible).");
     let existing = members.find((m) => m.email.toLowerCase() === em);
     if (existing) {
       if (existing.role !== "responsable") {

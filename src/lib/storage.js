@@ -59,3 +59,24 @@ async function set(key, value, shared) {
 if (typeof window !== "undefined" && !window.storage) {
   window.storage = { get, set };
 }
+
+// Vérifie le code d'accès responsable côté serveur (Worker) : sa vraie
+// valeur n'est jamais envoyée au navigateur, contrairement à une
+// comparaison faite directement dans le code client (voir worker/index.js).
+export async function verifyManagerCode(code) {
+  try {
+    const res = await fetch("/api/verify-manager-code", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-App-Secret": APP_SECRET,
+      },
+      body: JSON.stringify({ code }),
+    });
+    if (!res.ok) return false;
+    const body = await res.json();
+    return !!body.valid;
+  } catch {
+    return false;
+  }
+}

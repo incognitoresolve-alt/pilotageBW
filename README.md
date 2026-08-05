@@ -68,4 +68,4 @@ Dans l'onglet **Suivi & objectifs**, le responsable dispose d'un bouton **Export
 ## Comptes
 
 - **Collaborateur** : nom + e-mail suffisent pour créer un compte.
-- **Responsable** : nécessite le code d'accès (défini par `MANAGER_CODE` dans `src/App.jsx`, à personnaliser avant mise en production).
+- **Responsable** : nécessite le code d'accès, défini par `MANAGER_CODE` dans `wrangler.toml` (à personnaliser avant mise en production). Contrairement à `APP_SECRET`, ce code est vérifié côté Worker (`POST /api/verify-manager-code`) et n'est **jamais envoyé au navigateur** — sa valeur reste un vrai secret, invisible dans le bundle JS public.
