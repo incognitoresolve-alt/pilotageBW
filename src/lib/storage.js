@@ -15,13 +15,25 @@ function localKey(key) {
   return `${PREFIX}:local:${key}`;
 }
 
+async function describeFailure(res) {
+  try {
+    const body = await res.json();
+    if (body && typeof body.serverSecretLength === "number") {
+      return `${res.status}: secret serveur=${body.serverSecretConfigured ? body.serverSecretLength + " car." : "absent"}, secret envoyé=${body.clientSecretLength} car.`;
+    }
+  } catch {
+    // pas de corps JSON exploitable, on retombe sur le statut brut
+  }
+  return String(res.status);
+}
+
 async function get(key, shared) {
   if (shared) {
     const res = await fetch(`${API_BASE}/${encodeURIComponent(key)}`, {
       headers: { "X-App-Secret": APP_SECRET },
     });
     if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`GET ${key} failed: ${res.status}`);
+    if (!res.ok) throw new Error(`GET ${key} failed: ${await describeFailure(res)}`);
     return res.json();
   }
   const raw = window.localStorage.getItem(localKey(key));
@@ -38,7 +50,7 @@ async function set(key, value, shared) {
       },
       body: JSON.stringify({ value }),
     });
-    if (!res.ok) throw new Error(`PUT ${key} failed: ${res.status}`);
+    if (!res.ok) throw new Error(`PUT ${key} failed: ${await describeFailure(res)}`);
     return;
   }
   window.localStorage.setItem(localKey(key), value);

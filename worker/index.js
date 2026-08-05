@@ -17,8 +17,22 @@ export default {
     const match = url.pathname.match(/^\/api\/storage\/([^/]+)$/);
 
     if (match) {
-      if (request.headers.get("X-App-Secret") !== env.APP_SECRET) {
-        return new Response("Unauthorized", { status: 401 });
+      const clientSecret = request.headers.get("X-App-Secret") || "";
+      const serverSecret = env.APP_SECRET || "";
+      if (clientSecret !== serverSecret) {
+        // Diagnostic minimal (longueurs uniquement, jamais les valeurs) pour
+        // distinguer "APP_SECRET absent côté Worker" de "VITE_APP_SECRET
+        // absent/différent côté build" sans avoir à comparer des captures
+        // d'écran de secrets à la main.
+        return new Response(
+          JSON.stringify({
+            error: "unauthorized",
+            serverSecretConfigured: serverSecret.length > 0,
+            serverSecretLength: serverSecret.length,
+            clientSecretLength: clientSecret.length,
+          }),
+          { status: 401, headers: { "Content-Type": "application/json" } }
+        );
       }
 
       const key = decodeURIComponent(match[1]);
