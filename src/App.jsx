@@ -785,7 +785,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
                     <span className="font-medium" style={{ color: THEME.navy }}>
                       {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
                     </span>
-                    <ConfirmDeleteButton onConfirm={() => remove(e.id)} label="Supprimer" />
+                    <ConfirmActionButton onConfirm={() => remove(e.id)} label="Supprimer" />
                   </div>
                 </div>
               ))}
@@ -800,7 +800,19 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify 
   );
 }
 
-function ConfirmDeleteButton({ onConfirm, label = "Supprimer" }) {
+// Bouton d'action à double confirmation, générique : un premier clic
+// arme un bouton "Confirmer" (+ annulation) pendant quelques secondes
+// au lieu d'agir immédiatement. Utilisé pour les suppressions (icône
+// seule, rouge) et pour l'application groupée d'objectifs (bouton
+// texte, teal).
+function ConfirmActionButton({
+  onConfirm,
+  label,
+  confirmLabel = "Confirmer",
+  icon: Icon = Trash2,
+  color = THEME.red,
+  iconOnly = true,
+}) {
   const [armed, setArmed] = useState(false);
 
   useEffect(() => {
@@ -819,9 +831,9 @@ function ConfirmDeleteButton({ onConfirm, label = "Supprimer" }) {
             onConfirm();
           }}
           className="px-2 py-1 rounded-md text-xs font-semibold text-white whitespace-nowrap"
-          style={{ background: THEME.red }}
+          style={{ background: color }}
         >
-          Confirmer
+          {confirmLabel}
         </button>
         <button
           type="button"
@@ -835,14 +847,27 @@ function ConfirmDeleteButton({ onConfirm, label = "Supprimer" }) {
     );
   }
 
+  if (iconOnly) {
+    return (
+      <button
+        type="button"
+        onClick={() => setArmed(true)}
+        className="p-1.5 rounded-md flex-shrink-0"
+        aria-label={label}
+      >
+        <Icon size={14} style={{ color }} />
+      </button>
+    );
+  }
+
   return (
     <button
       type="button"
       onClick={() => setArmed(true)}
-      className="p-1.5 rounded-md flex-shrink-0"
-      aria-label={label}
+      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg whitespace-nowrap transition-opacity hover:opacity-90"
+      style={{ background: color, color: "#fff" }}
     >
-      <Trash2 size={14} style={{ color: THEME.red }} />
+      <Icon size={14} /> {label}
     </button>
   );
 }
@@ -887,6 +912,22 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
   const [editing, setEditing] = useState(null); // memberId being edited by manager
   const [draft, setDraft] = useState(emptyFigures());
   const [objDraft, setObjDraft] = useState({ objectifAssurance: 0, objectifCredit: 0, objectifMontant: 0 });
+  const [generalObj, setGeneralObj] = useState({ objectifAssurance: 5, objectifCredit: 5, objectifMontant: 5000 });
+
+  const applyGeneralObjectives = async () => {
+    const updated = members.map((m) =>
+      m.role === "collaborateur"
+        ? {
+            ...m,
+            objectifAssurance: Number(generalObj.objectifAssurance) || 0,
+            objectifCredit: Number(generalObj.objectifCredit) || 0,
+            objectifMontant: Number(generalObj.objectifMontant) || 0,
+          }
+        : m
+    );
+    const ok = await setMembers(updated);
+    if (ok) notify(`Objectifs généraux appliqués à ${collaborators.length} collaborateur(s).`);
+  };
 
   const startEdit = (member) => {
     setEditing(member.id);
@@ -971,6 +1012,55 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
           </button>
         )}
       </div>
+
+      {isManager && collaborators.length > 0 && (
+        <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+          <h2 className="text-sm font-semibold mb-1">Objectifs généraux</h2>
+          <p className="text-xs mb-4" style={{ color: THEME.navySoft }}>
+            S'applique à tous les collaborateurs ({collaborators.length}) en une fois — les objectifs individuels restent modifiables ensuite via "Mettre à jour" sur chaque collaborateur.
+          </p>
+          <div className="grid sm:grid-cols-3 gap-3 mb-4">
+            <Field label="Objectif assurances (nombre)">
+              <input
+                type="number"
+                min="0"
+                value={generalObj.objectifAssurance}
+                onChange={(e) => setGeneralObj((o) => ({ ...o, objectifAssurance: e.target.value }))}
+                className="w-full px-3 py-2 rounded-lg text-sm text-center"
+                style={{ border: `1px solid ${THEME.line}` }}
+              />
+            </Field>
+            <Field label="Objectif crédits (nombre)">
+              <input
+                type="number"
+                min="0"
+                value={generalObj.objectifCredit}
+                onChange={(e) => setGeneralObj((o) => ({ ...o, objectifCredit: e.target.value }))}
+                className="w-full px-3 py-2 rounded-lg text-sm text-center"
+                style={{ border: `1px solid ${THEME.line}` }}
+              />
+            </Field>
+            <Field label="Objectif montant (€)">
+              <input
+                type="number"
+                min="0"
+                value={generalObj.objectifMontant}
+                onChange={(e) => setGeneralObj((o) => ({ ...o, objectifMontant: e.target.value }))}
+                className="w-full px-3 py-2 rounded-lg text-sm text-center"
+                style={{ border: `1px solid ${THEME.line}` }}
+              />
+            </Field>
+          </div>
+          <ConfirmActionButton
+            onConfirm={applyGeneralObjectives}
+            label={`Appliquer à tous les collaborateurs (${collaborators.length})`}
+            confirmLabel="Confirmer"
+            icon={Users}
+            color={THEME.teal}
+            iconOnly={false}
+          />
+        </div>
+      )}
 
       {visibleMembers.length === 0 && (
         <p className="text-sm text-center py-10" style={{ color: THEME.navySoft }}>
@@ -1212,7 +1302,7 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify }) {
                   <span className="text-xs" style={{ color: THEME.navySoft }}>
                     Obj. {m.objectifAssurance ?? 5} assur. / {m.objectifCredit ?? 5} créd. / {formatEUR(m.objectifMontant ?? 5000)}
                   </span>
-                  <ConfirmDeleteButton onConfirm={() => removeMember(m.id)} label="Retirer" />
+                  <ConfirmActionButton onConfirm={() => removeMember(m.id)} label="Retirer" />
                 </div>
               </div>
             ))}
