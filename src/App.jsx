@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Shield, CreditCard, Users, LogOut, Plus, Trash2, CheckCircle2,
   Calendar, Settings, ChevronRight, Lock, TrendingUp, ClipboardList,
-  AlertCircle, Award, X, Download, Euro
+  AlertCircle, Award, X, Download, Euro, History
 } from "lucide-react";
 import * as XLSX from "xlsx";
 
@@ -60,6 +60,7 @@ export default function App() {
   const [members, setMembers] = useState([]);
   const [entries, setEntries] = useState([]);
   const [figures, setFigures] = useState({}); // { [monthKey]: { [memberId]: {assurance, ...CREDIT_TYPES} } }
+  const [deletionHistory, setDeletionHistory] = useState([]); // [{id, kind, deletedAt, deletedBy, data}]
   const [session, setSession] = useState(null); // {id, name, email, role}
   const [tab, setTab] = useState("saisie");
   const [toast, setToast] = useState(null);
@@ -77,15 +78,17 @@ export default function App() {
       const onError = (e) => {
         loadError = e;
       };
-      const [m, e, f, lastSession] = await Promise.all([
+      const [m, e, f, h, lastSession] = await Promise.all([
         loadShared("members", [], onError),
         loadShared("entries", [], onError),
         loadShared("figures", {}, onError),
+        loadShared("deletionHistory", [], onError),
         loadLocal("last-session", null),
       ]);
       setMembers(m);
       setEntries(e);
       setFigures(f);
+      setDeletionHistory(h);
       if (lastSession && m.find((x) => x.id === lastSession.id)) {
         setSession(lastSession);
       }
@@ -140,6 +143,26 @@ export default function App() {
       return false;
     }
   };
+  const persistDeletionHistory = async (next) => {
+    const previous = deletionHistory;
+    setDeletionHistory(next);
+    try {
+      await saveShared("deletionHistory", next);
+      return true;
+    } catch (e) {
+      console.error("storage set failed", "deletionHistory", e);
+      setDeletionHistory(previous);
+      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
+      return false;
+    }
+  };
+  // Journalise un élément supprimé (dossier ou membre) avant sa suppression
+  // effective, pour garder une trace consultable dans l'onglet Historique.
+  const recordDeletion = (kind, data, actor) =>
+    persistDeletionHistory([
+      { id: uid(), kind, deletedAt: new Date().toISOString(), deletedBy: { id: actor.id, name: actor.name }, data },
+      ...deletionHistory,
+    ]);
 
   const login = async (member) => {
     setSession(member);
@@ -199,6 +222,8 @@ export default function App() {
           setEntries={persistEntries}
           figures={figures}
           setFigures={persistFigures}
+          deletionHistory={deletionHistory}
+          recordDeletion={recordDeletion}
           tab={tab}
           setTab={setTab}
           mKey={mKey}
@@ -397,7 +422,7 @@ function Field({ label, children }) {
 }
 
 /* ---------------- MAIN APP ---------------- */
-function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, setFigures, tab, setTab, mKey, notify }) {
+function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, setFigures, deletionHistory, recordDeletion, tab, setTab, mKey, notify }) {
   const isManager = session.role === "responsable";
 
   return (
@@ -442,11 +467,23 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
             Équipe
           </TabButton>
         )}
+        {isManager && (
+          <TabButton active={tab === "historique"} onClick={() => setTab("historique")} icon={History}>
+            Historique
+          </TabButton>
+        )}
       </nav>
 
       <main className="max-w-5xl mx-auto px-5 pb-16 pt-5">
         {tab === "saisie" && (
-          <SaisieTab session={session} entries={entries} setEntries={setEntries} mKey={mKey} notify={notify} />
+          <SaisieTab
+            session={session}
+            entries={entries}
+            setEntries={setEntries}
+            recordDeletion={recordDeletion}
+            mKey={mKey}
+            notify={notify}
+          />
         )}
         {tab === "suivi" && (
           <SuiviTab
@@ -462,7 +499,10 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
           />
         )}
         {tab === "equipe" && isManager && (
-          <EquipeTab members={members} setMembers={setMembers} notify={notify} />
+          <EquipeTab members={members} setMembers={setMembers} recordDeletion={recordDeletion} session={session} notify={notify} />
+        )}
+        {tab === "historique" && isManager && (
+          <HistoriqueTab deletionHistory={deletionHistory} />
         )}
       </main>
     </div>
@@ -486,7 +526,7 @@ function TabButton({ active, onClick, icon: Icon, children }) {
 }
 
 /* ---------------- SAISIE TAB ---------------- */
-function SaisieTab({ session, entries, setEntries, mKey, notify }) {
+function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify }) {
   const [type, setType] = useState("assurance");
   const [creditType, setCreditType] = useState("PAT");
   const [assuranceType, setAssuranceType] = useState("ALLIN");
@@ -529,7 +569,9 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
   };
 
   const remove = async (id) => {
+    const entry = entries.find((e) => e.id === id);
     await setEntries(entries.filter((e) => e.id !== id));
+    if (entry) await recordDeletion("entry", entry, session);
   };
 
   const countAssurance = myEntries
@@ -1100,13 +1142,17 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
 }
 
 /* ---------------- EQUIPE TAB (manager only) ---------------- */
-function EquipeTab({ members, setMembers, notify }) {
+function EquipeTab({ members, setMembers, recordDeletion, session, notify }) {
   const collaborators = members.filter((m) => m.role === "collaborateur");
   const managers = members.filter((m) => m.role === "responsable");
 
   const removeMember = async (id) => {
+    const member = members.find((m) => m.id === id);
     const ok = await setMembers(members.filter((m) => m.id !== id));
-    if (ok) notify("Membre retiré.");
+    if (ok) {
+      if (member) await recordDeletion("member", member, session);
+      notify("Membre retiré.");
+    }
   };
 
   return (
@@ -1158,6 +1204,72 @@ function EquipeTab({ members, setMembers, notify }) {
       <p className="text-xs flex items-center gap-1.5" style={{ color: THEME.navySoft }}>
         <Settings size={12} /> Les objectifs individuels se règlent depuis l'onglet "Suivi & objectifs", en cliquant sur "Mettre à jour".
       </p>
+    </div>
+  );
+}
+
+/* ---------------- HISTORIQUE TAB (manager only) ---------------- */
+function HistoriqueTab({ deletionHistory }) {
+  const sorted = [...deletionHistory].sort((a, b) => (a.deletedAt < b.deletedAt ? 1 : -1));
+
+  const describe = (item) => {
+    const { kind, data } = item;
+    if (kind === "entry") {
+      const label =
+        data.type === "assurance"
+          ? `Assurance ${data.assuranceType}${data.quantite ? ` (× ${data.quantite})` : ""}`
+          : `Crédit ${data.creditType} — ${formatEUR(data.montant)}`;
+      return `${label} — ${data.dossier} (${data.personName})`;
+    }
+    if (kind === "member") {
+      return `${data.role === "responsable" ? "Responsable" : "Collaborateur"} — ${data.name} (${data.email})`;
+    }
+    return "Élément supprimé";
+  };
+
+  const iconFor = (item) => {
+    if (item.kind === "member") return Users;
+    return item.data.type === "assurance" ? Shield : CreditCard;
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl p-4 flex items-center gap-3" style={{ background: THEME.navy, color: "#fff" }}>
+        <History size={18} style={{ color: THEME.teal }} />
+        <div className="text-sm">
+          <span className="font-semibold">{deletionHistory.length}</span> suppression{deletionHistory.length !== 1 ? "s" : ""} enregistrée{deletionHistory.length !== 1 ? "s" : ""} au total
+        </div>
+      </div>
+
+      <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+        <h2 className="text-sm font-semibold mb-3">Éléments supprimés</h2>
+        {sorted.length === 0 ? (
+          <p className="text-sm py-10 text-center" style={{ color: THEME.navySoft }}>
+            Aucune suppression enregistrée pour l'instant.
+          </p>
+        ) : (
+          <div className="space-y-2 max-h-[32rem] overflow-y-auto pr-1">
+            {sorted.map((item) => {
+              const Icon = iconFor(item);
+              return (
+                <div
+                  key={item.id}
+                  className="flex items-start gap-2.5 px-3 py-2.5 rounded-lg text-sm"
+                  style={{ background: THEME.bg }}
+                >
+                  <Icon size={15} style={{ color: THEME.red, flexShrink: 0, marginTop: 2 }} />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium truncate">{describe(item)}</div>
+                    <div className="text-xs" style={{ color: THEME.navySoft }}>
+                      Supprimé par {item.deletedBy?.name || "?"} le {new Date(item.deletedAt).toLocaleString("fr-FR")}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
