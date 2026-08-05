@@ -85,6 +85,11 @@ export default function App() {
   const [session, setSession] = useState(null); // {id, name, email, role}
   const [tab, setTab] = useState("saisie");
   const [toast, setToast] = useState(null);
+  // ok: null = vérification initiale pas encore terminée, true/false ensuite
+  // — reflète la dernière opération réseau (chargement ou sauvegarde),
+  // pour un indicateur permanent au lieu de compter sur le toast (qui
+  // disparaît avant qu'on ait pu le lire/capturer).
+  const [serverStatus, setServerStatus] = useState({ ok: null, detail: null });
 
   const mKey = monthKey();
 
@@ -115,7 +120,10 @@ export default function App() {
       }
       setReady(true);
       if (loadError) {
+        setServerStatus({ ok: false, detail: loadError.message });
         notify(`Chargement des données impossible (${loadError.message}) — les chiffres affichés peuvent être incomplets.`, true);
+      } else {
+        setServerStatus({ ok: true, detail: null });
       }
     })();
   }, []);
@@ -130,10 +138,12 @@ export default function App() {
     setMembers(next);
     try {
       await saveShared("members", next);
+      setServerStatus({ ok: true, detail: null });
       return true;
     } catch (e) {
       console.error("storage set failed", "members", e);
       setMembers(previous);
+      setServerStatus({ ok: false, detail: e.message });
       notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
       return false;
     }
@@ -143,10 +153,12 @@ export default function App() {
     setEntries(next);
     try {
       await saveShared("entries", next);
+      setServerStatus({ ok: true, detail: null });
       return true;
     } catch (e) {
       console.error("storage set failed", "entries", e);
       setEntries(previous);
+      setServerStatus({ ok: false, detail: e.message });
       notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
       return false;
     }
@@ -156,10 +168,12 @@ export default function App() {
     setFigures(next);
     try {
       await saveShared("figures", next);
+      setServerStatus({ ok: true, detail: null });
       return true;
     } catch (e) {
       console.error("storage set failed", "figures", e);
       setFigures(previous);
+      setServerStatus({ ok: false, detail: e.message });
       notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
       return false;
     }
@@ -169,10 +183,12 @@ export default function App() {
     setDeletionHistory(next);
     try {
       await saveShared("deletionHistory", next);
+      setServerStatus({ ok: true, detail: null });
       return true;
     } catch (e) {
       console.error("storage set failed", "deletionHistory", e);
       setDeletionHistory(previous);
+      setServerStatus({ ok: false, detail: e.message });
       notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
       return false;
     }
@@ -251,6 +267,8 @@ export default function App() {
           {toast.msg}
         </div>
       )}
+
+      <ServerStatusBadge status={serverStatus} />
 
       {!session ? (
         <LoginScreen members={members} onCreateMember={persistMembers} onLogin={login} notify={notify} />
@@ -455,6 +473,33 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
           Connexion par identification e-mail. Le code responsable protège la mise à jour des chiffres officiels.
         </p>
       </div>
+    </div>
+  );
+}
+
+// Indicateur permanent (bas d'écran, toutes pages) de l'état de la
+// connexion au serveur — reflète la dernière opération réseau
+// (chargement initial ou sauvegarde). Contrairement au toast, ne
+// disparaît jamais tout seul : plus besoin de capture d'écran au bon
+// moment pour diagnostiquer un problème.
+function ServerStatusBadge({ status }) {
+  if (status.ok === null) return null; // vérification initiale pas encore terminée
+  return (
+    <div
+      className="fixed bottom-3 left-3 z-40 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium shadow-sm"
+      style={{
+        background: status.ok ? "#E3F3EF" : THEME.redSoft,
+        color: status.ok ? THEME.teal : THEME.red,
+        maxWidth: "min(92vw, 26rem)",
+      }}
+    >
+      <span
+        className="inline-block rounded-full flex-shrink-0"
+        style={{ width: 7, height: 7, background: status.ok ? THEME.teal : THEME.red }}
+      />
+      <span className="truncate">
+        {status.ok ? "Connexion serveur : OK" : `Connexion serveur : KO${status.detail ? ` — ${status.detail}` : ""}`}
+      </span>
     </div>
   );
 }
