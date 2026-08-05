@@ -442,20 +442,27 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
     <div>
       <header
         className="sticky top-0 z-20 px-5 py-4 flex items-center justify-between"
-        style={{ background: THEME.card, borderBottom: `3px solid ${accent}` }}
+        style={{ background: isManager ? accent : THEME.card, borderBottom: isManager ? "none" : `1px solid ${THEME.line}` }}
       >
         <div>
-          <div style={{ fontFamily: FONT_DISPLAY }} className="text-base font-semibold" >
+          <div
+            style={{ fontFamily: FONT_DISPLAY, color: isManager ? "#fff" : THEME.navy }}
+            className="text-base font-semibold"
+          >
             Suivi Commercial
           </div>
-          <div className="text-xs capitalize" style={{ color: THEME.navySoft }}>{monthLabel()}</div>
+          <div className="text-xs capitalize" style={{ color: isManager ? "rgba(255,255,255,0.75)" : THEME.navySoft }}>
+            {monthLabel()}
+          </div>
         </div>
         <div className="flex items-center gap-3">
           <div className="text-right hidden sm:block">
-            <div className="text-sm font-medium">{session.name}</div>
+            <div className="text-sm font-medium" style={{ color: isManager ? "#fff" : THEME.navy }}>
+              {session.name}
+            </div>
             <div
               className="text-xs font-medium inline-block px-2 py-0.5 rounded-full"
-              style={{ color: accent, background: accentSoft }}
+              style={{ color: accent, background: isManager ? "#fff" : accentSoft }}
             >
               {isManager ? "Responsable" : "Collaborateur"}
             </div>
@@ -463,10 +470,10 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
           <button
             onClick={onLogout}
             className="p-2 rounded-lg transition-colors"
-            style={{ background: THEME.bg }}
+            style={{ background: isManager ? "rgba(255,255,255,0.15)" : THEME.bg }}
             aria-label="Se déconnecter"
           >
-            <LogOut size={16} style={{ color: THEME.navySoft }} />
+            <LogOut size={16} style={{ color: isManager ? "#fff" : THEME.navySoft }} />
           </button>
         </div>
       </header>
