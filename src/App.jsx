@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Shield, CreditCard, Users, LogOut, Plus, Trash2, CheckCircle2,
   Calendar, Settings, ChevronRight, ChevronLeft, Lock, TrendingUp, ClipboardList,
-  AlertCircle, Award, X, Download, Euro, History, RotateCcw, Pencil, Link2, Copy
+  AlertCircle, Award, X, Download, Euro, History, RotateCcw, Pencil, Link2, Copy,
+  RefreshCw, Loader2, BarChart3
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { verifyManagerCode } from "./lib/storage";
@@ -57,6 +58,90 @@ const emptyObjByType = () => ({
   assurance: Object.fromEntries(ASSURANCE_TYPES.map((t) => [t, 0])),
   credit: Object.fromEntries(CREDIT_TYPES.map((t) => [t, 0])),
 });
+
+// --- Découpage temporel pour le graphique de performance (Suivi & objectifs) ---
+// Chaque granularité produit une liste fixe de "buckets" (bornes [début,fin]
+// en dates ISO "YYYY-MM-DD", comparables directement à entry.date) allant du
+// plus ancien au plus récent, le dernier étant toujours la période en cours.
+const PERIOD_OPTIONS = [
+  { key: "jour", label: "Jour", count: 14 },
+  { key: "semaine", label: "Semaine", count: 8 },
+  { key: "mois", label: "Mois", count: 6 },
+  { key: "annee", label: "Année", count: 5 },
+];
+const toISODate = (d) => d.toISOString().slice(0, 10);
+const startOfWeekMonday = (d) => {
+  const s = new Date(d);
+  const day = (s.getDay() + 6) % 7; // 0 = lundi
+  s.setDate(s.getDate() - day);
+  return s;
+};
+function buildPeriodBuckets(granularity, refDate = new Date()) {
+  const { count } = PERIOD_OPTIONS.find((p) => p.key === granularity);
+  const buckets = [];
+  if (granularity === "jour") {
+    for (let i = count - 1; i >= 0; i--) {
+      const d = new Date(refDate);
+      d.setDate(d.getDate() - i);
+      buckets.push({
+        startISO: toISODate(d),
+        endISO: toISODate(d),
+        label: d.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" }),
+        fullLabel: d.toLocaleDateString("fr-FR", { day: "2-digit", month: "long", year: "numeric" }),
+      });
+    }
+  } else if (granularity === "semaine") {
+    const thisWeekStart = startOfWeekMonday(refDate);
+    for (let i = count - 1; i >= 0; i--) {
+      const s = new Date(thisWeekStart);
+      s.setDate(s.getDate() - i * 7);
+      const e = new Date(s);
+      e.setDate(s.getDate() + 6);
+      buckets.push({
+        startISO: toISODate(s),
+        endISO: toISODate(e),
+        label: s.toLocaleDateString("fr-FR", { day: "2-digit", month: "2-digit" }),
+        fullLabel: `Semaine du ${s.toLocaleDateString("fr-FR", { day: "2-digit", month: "long" })}`,
+      });
+    }
+  } else if (granularity === "mois") {
+    for (let i = count - 1; i >= 0; i--) {
+      const s = new Date(refDate.getFullYear(), refDate.getMonth() - i, 1);
+      const e = new Date(s.getFullYear(), s.getMonth() + 1, 0);
+      buckets.push({
+        startISO: toISODate(s),
+        endISO: toISODate(e),
+        label: s.toLocaleDateString("fr-FR", { month: "short" }).replace(".", ""),
+        fullLabel: s.toLocaleDateString("fr-FR", { month: "long", year: "numeric" }),
+      });
+    }
+  } else {
+    for (let i = count - 1; i >= 0; i--) {
+      const y = refDate.getFullYear() - i;
+      buckets.push({
+        startISO: `${y}-01-01`,
+        endISO: `${y}-12-31`,
+        label: String(y),
+        fullLabel: String(y),
+      });
+    }
+  }
+  return buckets;
+}
+// "Performance" = nombre de dossiers vendus (assurances, pondérées par la
+// quantité déclarée, + crédits) — une unité de mesure commune quel que soit
+// le produit, cohérente avec les compteurs déjà affichés dans "Ma saisie".
+function performanceSeries(entries, personId, granularity) {
+  const buckets = buildPeriodBuckets(granularity);
+  const mine = entries.filter((e) => e.personId === personId);
+  return buckets.map((b) => ({
+    ...b,
+    value: mine.reduce((s, e) => {
+      if (e.date < b.startISO || e.date > b.endISO) return s;
+      return s + (e.type === "assurance" ? e.quantite || 1 : 1);
+    }, 0),
+  }));
+}
 
 async function loadShared(key, fallback, onError) {
   try {
@@ -151,6 +236,62 @@ export default function App() {
       }
     })();
   }, []);
+
+  // Les données partagées (membres, ventes, chiffres, invitations) ne sont
+  // chargées qu'une fois au démarrage : sans ce rafraîchissement, un
+  // responsable qui garde l'onglet ouvert ne voit jamais les ventes qu'un
+  // collaborateur déclare pendant ce temps (et inversement). On refait
+  // silencieusement un GET en arrière-plan (fallback `null` = "rien de
+  // nouveau ou échec, on ne touche pas à l'état actuel") : au retour sur
+  // l'onglet, périodiquement, et via le bouton d'actualisation manuelle.
+  const refreshShared = useCallback(async ({ silent = true } = {}) => {
+    let loadError = null;
+    const onError = (e) => {
+      loadError = e;
+    };
+    const [m, e, f, h, inv] = await Promise.all([
+      loadShared("members", null, onError),
+      loadShared("entries", null, onError),
+      loadShared("figures", null, onError),
+      loadShared("deletionHistory", null, onError),
+      loadShared("invites", null, onError),
+    ]);
+    if (loadError) {
+      setServerStatus({ ok: false, detail: loadError.message });
+      if (!silent) notify(`Actualisation impossible (${loadError.message}).`, true);
+      return false;
+    }
+    if (m !== null) setMembers(m);
+    if (e !== null) setEntries(e);
+    if (f !== null) setFigures(f);
+    if (h !== null) setDeletionHistory(h);
+    if (inv !== null) setInvites(inv);
+    setServerStatus({ ok: true, detail: null });
+    if (!silent) notify("Données actualisées.");
+    return true;
+  }, [notify]);
+
+  useEffect(() => {
+    if (!ready) return;
+    const interval = setInterval(() => refreshShared(), 30000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshShared();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [ready, refreshShared]);
+
+  const [refreshing, setRefreshing] = useState(false);
+  const manualRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await refreshShared({ silent: false });
+    setRefreshing(false);
+  }, [refreshShared]);
 
   // Chaque fonction renvoie true si la sauvegarde a réussi, false sinon —
   // les appelants doivent vérifier ce retour avant d'afficher un message
@@ -272,8 +413,14 @@ export default function App() {
 
   if (!ready) {
     return (
-      <div style={{ background: THEME.bg }} className="min-h-screen flex items-center justify-center">
-        <div className="text-sm tracking-wide" style={{ color: THEME.navy, fontFamily: FONT_BODY }}>
+      <div style={{ background: THEME.bg }} className="min-h-screen flex flex-col items-center justify-center gap-3">
+        <div
+          className="inline-flex items-center justify-center w-14 h-14 rounded-2xl"
+          style={{ background: THEME.navy }}
+        >
+          <Loader2 size={22} color={THEME.teal} className="animate-spin" />
+        </div>
+        <div className="text-sm tracking-wide" style={{ color: THEME.navySoft, fontFamily: FONT_BODY }}>
           Chargement…
         </div>
       </div>
@@ -291,11 +438,15 @@ export default function App() {
           outline-offset: 1px;
         }
         ::selection { background: ${THEME.tealSoft}; }
+        @keyframes scFadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+        .sc-fade-in { animation: scFadeIn 0.22s ease-out; }
+        @keyframes scToastIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+        .sc-toast { animation: scToastIn 0.18s ease-out; }
       `}</style>
 
       {toast && (
         <div
-          className="fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2"
+          className="sc-toast fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2"
           style={{ background: toast.isError ? THEME.red : THEME.navy, color: "#fff" }}
         >
           {toast.isError ? (
@@ -343,6 +494,8 @@ export default function App() {
           setTab={setTab}
           mKey={mKey}
           notify={notify}
+          onRefresh={manualRefresh}
+          refreshing={refreshing}
         />
       )}
     </div>
@@ -668,7 +821,7 @@ function Field({ label, children }) {
 }
 
 /* ---------------- MAIN APP ---------------- */
-function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, setFigures, deletionHistory, recordDeletion, restoreDeletion, invites, setInvites, tab, setTab, mKey, notify }) {
+function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, setFigures, deletionHistory, recordDeletion, restoreDeletion, invites, setInvites, tab, setTab, mKey, notify, onRefresh, refreshing }) {
   const isManager = session.role === "responsable";
   const accent = isManager ? MANAGER_ACCENT : THEME.teal;
   const accentSoft = isManager ? MANAGER_ACCENT_SOFT : THEME.tealSoft;
@@ -703,6 +856,16 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
             </div>
           </div>
           <button
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="p-2 rounded-lg transition-colors disabled:opacity-60"
+            style={{ background: isManager ? "rgba(255,255,255,0.15)" : THEME.bg }}
+            aria-label="Actualiser les données"
+            title="Actualiser les données"
+          >
+            <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} style={{ color: isManager ? "#fff" : THEME.navySoft }} />
+          </button>
+          <button
             onClick={onLogout}
             className="p-2 rounded-lg transition-colors"
             style={{ background: isManager ? "rgba(255,255,255,0.15)" : THEME.bg }}
@@ -732,7 +895,7 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
         )}
       </nav>
 
-      <main className="max-w-5xl mx-auto px-5 pb-16 pt-5">
+      <main key={tab} className="sc-fade-in max-w-5xl mx-auto px-5 pb-16 pt-5">
         {tab === "saisie" && (
           <SaisieTab
             session={session}
@@ -1500,6 +1663,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                 onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifAssurance: v }))}
                 draftObjective={objDraft.objectifAssurance}
                 readOnlyValue
+                isCurrentMonth={isCurrentMonth}
               />
               <ProgressBlock
                 icon={CreditCard}
@@ -1513,6 +1677,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                 onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifCredit: v }))}
                 draftObjective={objDraft.objectifCredit}
                 readOnlyValue
+                isCurrentMonth={isCurrentMonth}
               />
               <ProgressBlock
                 icon={Euro}
@@ -1527,7 +1692,12 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                 draftObjective={objDraft.objectifMontant}
                 readOnlyValue
                 format={formatEUR}
+                isCurrentMonth={isCurrentMonth}
               />
+            </div>
+
+            <div className="px-5 pb-5">
+              <PerformanceChart entries={entries} member={member} />
             </div>
 
             {isEditing && (
@@ -1677,9 +1847,11 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
   );
 }
 
-function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colorSoft, editing, onChangeValue, onChangeObjective, draftValue, draftObjective, readOnlyValue, format = (v) => v }) {
+function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colorSoft, editing, onChangeValue, onChangeObjective, draftValue, draftObjective, readOnlyValue, format = (v) => v, isCurrentMonth = true }) {
   const pct = objective > 0 ? Math.min(100, Math.round((value / objective) * 100)) : 0;
-  const atteint = reste === 0;
+  // Sans objectif fixé (0), "reste" tombe toujours à 0 : ne pas afficher un
+  // "Objectif atteint" trompeur quand il n'y a en réalité aucun objectif.
+  const atteint = objective > 0 && reste === 0;
   return (
     <div className="rounded-xl p-4" style={{ background: THEME.bg }}>
       <div className="flex items-center justify-between mb-2">
@@ -1723,9 +1895,170 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
         <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
       </div>
       <div className="text-xs font-medium" style={{ color: atteint ? color : THEME.navySoft }}>
-        {atteint ? "Objectif atteint" : `Reste ${format(reste)} avant la fin du mois`}
+        {atteint
+          ? "Objectif atteint"
+          : objective > 0
+          ? isCurrentMonth
+            ? `Reste ${format(reste)} avant la fin du mois`
+            : `Manquant : ${format(reste)}`
+          : "Aucun objectif fixé"}
       </div>
     </div>
+  );
+}
+
+// Graphique linéaire de performance (dossiers vendus) d'un collaborateur —
+// bascule Jour/Semaine/Mois/Année, survol avec repère + infobulle, et un
+// détail sous forme de tableau (accessible sans passer par la souris).
+function PerformanceChart({ entries, member, color = THEME.teal }) {
+  const [granularity, setGranularity] = useState("mois");
+  const [hoverIdx, setHoverIdx] = useState(null);
+
+  const series = useMemo(
+    () => performanceSeries(entries, member.id, granularity),
+    [entries, member.id, granularity]
+  );
+
+  const W = 600;
+  const H = 168;
+  const padL = 22;
+  const padR = 22;
+  const padT = 14;
+  const padB = 26;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const n = series.length;
+  const maxVal = Math.max(1, ...series.map((b) => b.value));
+
+  const points = series.map((b, i) => ({
+    x: n > 1 ? padL + (i * plotW) / (n - 1) : padL + plotW / 2,
+    y: padT + plotH - (b.value / maxVal) * plotH,
+    ...b,
+  }));
+  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+  const areaPath = `${linePath} L ${points[n - 1].x.toFixed(1)},${(padT + plotH).toFixed(1)} L ${points[0].x.toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
+
+  const total = series.reduce((s, b) => s + b.value, 0);
+  const last = points[n - 1];
+  const active = hoverIdx !== null ? points[hoverIdx] : null;
+
+  const handleMove = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    setHoverIdx(Math.round(frac * (n - 1)));
+  };
+
+  // Un point sur deux (ou moins) reçoit une étiquette d'axe pour éviter le
+  // chevauchement quand il y a beaucoup de périodes (ex. 14 jours).
+  const labelEvery = n > 8 ? 2 : 1;
+
+  return (
+    <div className="rounded-xl p-4" style={{ background: THEME.bg }}>
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
+        <div className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: THEME.navySoft }}>
+          <BarChart3 size={14} style={{ color }} /> Performance — dossiers vendus
+        </div>
+        <div className="flex gap-1 rounded-lg p-0.5" style={{ background: THEME.card }}>
+          {PERIOD_OPTIONS.map((p) => (
+            <button
+              key={p.key}
+              type="button"
+              onClick={() => {
+                setGranularity(p.key);
+                setHoverIdx(null);
+              }}
+              className="px-2 py-1 rounded-md text-[11px] font-semibold transition-colors"
+              style={{
+                background: granularity === p.key ? THEME.navy : "transparent",
+                color: granularity === p.key ? "#fff" : THEME.navySoft,
+              }}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="relative">
+        <svg
+          viewBox={`0 0 ${W} ${H}`}
+          className="w-full"
+          style={{ height: "auto" }}
+          onMouseMove={handleMove}
+          onMouseLeave={() => setHoverIdx(null)}
+          role="img"
+          aria-label={`Évolution du nombre de dossiers vendus par ${member.name}, par ${granularity}`}
+        >
+          <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={THEME.line} strokeWidth="1" />
+          <path d={areaPath} fill={color} opacity="0.1" stroke="none" />
+          <path d={linePath} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+
+          {active && (
+            <line x1={active.x} y1={padT} x2={active.x} y2={padT + plotH} stroke={THEME.navySoft} strokeWidth="1" opacity="0.35" />
+          )}
+          <circle cx={last.x} cy={last.y} r="5" fill={color} stroke={THEME.bg} strokeWidth="2" />
+          {active && active !== last && (
+            <circle cx={active.x} cy={active.y} r="5" fill={color} stroke={THEME.bg} strokeWidth="2" />
+          )}
+
+          {points.map((p, i) =>
+            i % labelEvery === 0 || i === n - 1 ? (
+              <text
+                key={p.startISO}
+                x={p.x}
+                y={H - 6}
+                fontSize="9"
+                textAnchor="middle"
+                fill={THEME.navySoft}
+              >
+                {p.label}
+              </text>
+            ) : null
+          )}
+        </svg>
+
+        {active && (
+          <div
+            className="absolute top-0 px-2.5 py-1.5 rounded-lg text-xs shadow-md pointer-events-none"
+            style={{
+              left: `${Math.min(92, Math.max(8, (active.x / W) * 100))}%`,
+              transform: "translateX(-50%)",
+              background: THEME.navy,
+              color: "#fff",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <div className="font-semibold" style={{ fontFamily: FONT_DISPLAY }}>{active.value}</div>
+            <div style={{ color: "rgba(255,255,255,0.7)" }}>{active.fullLabel}</div>
+          </div>
+        )}
+      </div>
+
+      <div className="text-xs mt-1" style={{ color: THEME.navySoft }}>
+        Total sur la période : <strong style={{ color: THEME.navy }}>{total}</strong>
+      </div>
+      <PerformanceTable series={series} />
+    </div>
+  );
+}
+
+// Version tabulaire des mêmes données, repliée par défaut — équivalent
+// accessible du graphique (lecteur d'écran, sans survol nécessaire).
+function PerformanceTable({ series }) {
+  return (
+    <details className="mt-1">
+      <summary className="text-xs cursor-pointer font-medium" style={{ color: THEME.navySoft }}>
+        Détail chiffré par période
+      </summary>
+      <div className="mt-2 grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+        {series.map((b) => (
+          <div key={b.startISO} className="text-xs px-2 py-1.5 rounded-lg text-center" style={{ background: THEME.card }}>
+            <div className="font-semibold" style={{ color: THEME.navy }}>{b.value}</div>
+            <div style={{ color: THEME.navySoft }}>{b.label}</div>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 

@@ -28,6 +28,16 @@ Le "dernier compte connecté" (pour l'auto-login) reste dans le `localStorage` d
 
 **Limites** : KV est une base clé/valeur "eventually consistent" (propagation globale en quelques dizaines de secondes dans le pire cas) — largement suffisant pour une saisie occasionnelle en équipe, mais pas fait pour de l'écriture concurrente à haute fréquence (deux sauvegardes quasi simultanées peuvent s'écraser l'une l'autre). Pour aller plus loin, remplacer le binding KV par **Cloudflare D1** (SQLite managé, cohérence forte) dans `worker/index.js`.
 
+## Synchronisation entre utilisateurs
+
+Les données partagées (membres, ventes, chiffres, invitations) ne sont chargées qu'une fois à l'ouverture de l'application — sans mécanisme de rafraîchissement, un responsable qui garde l'onglet ouvert ne verrait jamais les ventes déclarées entre-temps par un collaborateur (et inversement). Pour éviter ça, l'application se resynchronise automatiquement :
+
+- au retour sur l'onglet (évènements `visibilitychange` / `focus`) ;
+- toutes les 30 secondes tant que l'onglet reste ouvert ;
+- à tout moment via le bouton d'actualisation (icône ↻) dans l'en-tête.
+
+Ce rafraîchissement est silencieux (pas de notification, sauf en cas d'échec) pour l'automatique, et confirmé par un toast pour le bouton manuel. C'est un rafraîchissement en arrière-plan, pas du temps réel — un écart de quelques secondes à quelques dizaines de secondes entre deux utilisateurs reste possible, cohérent avec le modèle KV décrit ci-dessus.
+
 ## Sécurité
 
 L'API (`/api/storage/*`) exige un header `X-App-Secret` correspondant à `APP_SECRET` — sans lui, impossible de lire ou d'écrire les données directement (curl, script, etc.) sans passer par l'application. Le frontend l'envoie automatiquement, sa valeur est injectée au build via la variable `VITE_APP_SECRET`.
@@ -64,6 +74,10 @@ L'API (`/api/storage/*`) exige un header `X-App-Secret` correspondant à `APP_SE
 ## Export Excel
 
 Dans l'onglet **Suivi & objectifs**, le responsable dispose d'un bouton **Exporter en Excel** qui télécharge un fichier `.xlsx` (`suivi-commercial-AAAA-MM.xlsx`) avec, pour chaque collaborateur : assurances réalisées/objectif, détail des crédits par type (PAT/OCA/BPR/MP7), total crédits/objectif, et nombre de dossiers déclarés dans le journal. Pratique à générer en fin de mois pour archiver les chiffres officiels de toute l'équipe.
+
+## Graphique de performance
+
+Dans **Suivi & objectifs**, chaque carte collaborateur affiche un graphique linéaire "Performance — dossiers vendus" (nombre de ventes déclarées, assurances + crédits confondus, pondéré par la quantité pour les assurances). Quatre bascules — **Jour** (14 derniers jours), **Semaine** (8 dernières semaines), **Mois** (6 derniers mois), **Année** (5 dernières années) — recalculent la série depuis le journal des ventes déclarées, tous mois confondus (contrairement au reste de l'onglet qui reste centré sur le mois consulté). Survoler le graphique affiche un repère + une infobulle ; un détail chiffré par période (tableau) est disponible sous le graphique, replié par défaut, pour un accès sans souris.
 
 ## Comptes
 
