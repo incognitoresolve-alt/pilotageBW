@@ -7,6 +7,7 @@ import {
 import * as XLSX from "xlsx";
 
 const CREDIT_TYPES = ["PAT", "OCA", "BPR", "MP7", "AUG", "DIM"];
+const ASSURANCE_TYPES = ["ALLIN", "DIMC", "DIM"];
 const MANAGER_CODE = "RESPONSABLE2026";
 
 const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -488,6 +489,8 @@ function TabButton({ active, onClick, icon: Icon, children }) {
 function SaisieTab({ session, entries, setEntries, mKey, notify }) {
   const [type, setType] = useState("assurance");
   const [creditType, setCreditType] = useState("PAT");
+  const [assuranceType, setAssuranceType] = useState("ALLIN");
+  const [quantite, setQuantite] = useState("1");
   const [dossier, setDossier] = useState("");
   const [montant, setMontant] = useState("");
   const [date, setDate] = useState(todayISO());
@@ -509,8 +512,10 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
       personName: session.name,
       type,
       creditType: type === "credit" ? creditType : null,
+      assuranceType: type === "assurance" ? assuranceType : null,
+      quantite: type === "assurance" ? Number(quantite) || 1 : null,
       dossier: dossier.trim(),
-      montant: Number(montant) || 0,
+      montant: type === "credit" ? Number(montant) || 0 : 0,
       date,
       createdAt: new Date().toISOString(),
     };
@@ -518,7 +523,8 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
     if (ok) {
       setDossier("");
       setMontant("");
-      notify(type === "assurance" ? "Assurance enregistrée." : `Crédit ${creditType} enregistré.`);
+      setQuantite("1");
+      notify(type === "assurance" ? `Assurance ${assuranceType} enregistrée.` : `Crédit ${creditType} enregistré.`);
     }
   };
 
@@ -526,7 +532,9 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
     await setEntries(entries.filter((e) => e.id !== id));
   };
 
-  const countAssurance = myEntries.filter((e) => e.type === "assurance").length;
+  const countAssurance = myEntries
+    .filter((e) => e.type === "assurance")
+    .reduce((s, e) => s + (e.quantite || 1), 0);
   const montantTotal = myEntries.reduce((s, e) => s + (e.montant || 0), 0);
   const countCredit = myEntries.filter((e) => e.type === "credit").length;
 
@@ -567,6 +575,27 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
             </Field>
           )}
 
+          {type === "assurance" && (
+            <Field label="Type d'assurance">
+              <div className="grid grid-cols-3 gap-1.5">
+                {ASSURANCE_TYPES.map((at) => (
+                  <button
+                    key={at}
+                    type="button"
+                    onClick={() => setAssuranceType(at)}
+                    className="py-2 rounded-lg text-xs font-semibold transition-colors"
+                    style={{
+                      background: assuranceType === at ? THEME.navy : THEME.bg,
+                      color: assuranceType === at ? "#fff" : THEME.navySoft,
+                    }}
+                  >
+                    {at}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          )}
+
           <Field label="Numéro de dossier">
             <input
               value={dossier}
@@ -577,26 +606,40 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
             />
           </Field>
 
-          <Field label="Montant vendu">
-            <div className="relative">
+          {type === "assurance" ? (
+            <Field label="Nombre d'assurances vendues">
               <input
                 type="number"
-                min="0"
-                step="0.01"
-                value={montant}
-                onChange={(e) => setMontant(e.target.value)}
-                placeholder="0,00"
-                className="w-full pl-3.5 pr-8 py-2.5 rounded-lg text-sm"
+                min="1"
+                step="1"
+                value={quantite}
+                onChange={(e) => setQuantite(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-lg text-sm"
                 style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
               />
-              <span
-                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-sm"
-                style={{ color: THEME.navySoft }}
-              >
-                €
-              </span>
-            </div>
-          </Field>
+            </Field>
+          ) : (
+            <Field label="Montant vendu">
+              <div className="relative">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={montant}
+                  onChange={(e) => setMontant(e.target.value)}
+                  placeholder="0,00"
+                  className="w-full pl-3.5 pr-8 py-2.5 rounded-lg text-sm"
+                  style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
+                />
+                <span
+                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-sm"
+                  style={{ color: THEME.navySoft }}
+                >
+                  €
+                </span>
+              </div>
+            </Field>
+          )}
 
           <Field label="Date">
             <input
@@ -654,7 +697,7 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
                     )}
                     <div className="min-w-0">
                       <div className="font-medium truncate">
-                        {e.type === "assurance" ? "Assurance" : `Crédit ${e.creditType}`} — {e.dossier}
+                        {e.type === "assurance" ? `Assurance ${e.assuranceType}` : `Crédit ${e.creditType}`} — {e.dossier}
                       </div>
                       <div className="text-xs" style={{ color: THEME.navySoft }}>
                         {new Date(e.date).toLocaleDateString("fr-FR")}
@@ -663,7 +706,7 @@ function SaisieTab({ session, entries, setEntries, mKey, notify }) {
                   </div>
                   <div className="flex items-center gap-3 flex-shrink-0">
                     <span className="font-medium" style={{ color: THEME.navy }}>
-                      {formatEUR(e.montant)}
+                      {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
                     </span>
                     <button onClick={() => remove(e.id)} className="p-1.5 rounded-md" aria-label="Supprimer">
                       <Trash2 size={14} style={{ color: THEME.red }} />
@@ -939,9 +982,11 @@ function SuiviTab({ session, members, setMembers, entries, figures, setFigures, 
                   <div className="mt-2 space-y-1.5">
                     {declared.map((e) => (
                       <div key={e.id} className="text-xs flex justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: THEME.bg }}>
-                        <span>{e.type === "assurance" ? "Assurance" : `Crédit ${e.creditType}`} — {e.dossier}</span>
+                        <span>{e.type === "assurance" ? `Assurance ${e.assuranceType}` : `Crédit ${e.creditType}`} — {e.dossier}</span>
                         <span className="flex items-center gap-2 flex-shrink-0">
-                          <span className="font-medium" style={{ color: THEME.navy }}>{formatEUR(e.montant)}</span>
+                          <span className="font-medium" style={{ color: THEME.navy }}>
+                            {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
+                          </span>
                           <span style={{ color: THEME.navySoft }}>{new Date(e.date).toLocaleDateString("fr-FR")}</span>
                         </span>
                       </div>
