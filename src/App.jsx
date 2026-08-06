@@ -187,6 +187,31 @@ function creditCountParTypeFor(creditRecords, memberId, monthKey) {
   );
 }
 
+// Répartition d'un lot de ventes déclarées (entries) par produit — nombre
+// pour les assurances, montant pour les crédits, PAT/BPR scindés en
+// Papier/eDirect. Utilisé par RecapGrid (Journal, Ma saisie, Suivi &
+// objectifs) pour un rendu cohérent partout dans l'app.
+function entriesBreakdown(scopedEntries) {
+  const assurance = Object.fromEntries(
+    ASSURANCE_TYPES.map((at) => [
+      at,
+      scopedEntries.filter((e) => e.type === "assurance" && e.assuranceType === at).reduce((s, e) => s + (e.quantite || 1), 0),
+    ])
+  );
+  const credit = {};
+  CREDIT_TYPES.forEach((ct) => {
+    const matches = scopedEntries.filter((e) => e.type === "credit" && e.creditType === ct);
+    if (CONTRACT_MODE_CREDIT_TYPES.includes(ct)) {
+      credit[ct] = Object.fromEntries(
+        CONTRACT_MODES.map((mode) => [mode, matches.filter((e) => e.contractMode === mode).reduce((s, e) => s + (e.montant || 0), 0)])
+      );
+    } else {
+      credit[ct] = matches.reduce((s, e) => s + (e.montant || 0), 0);
+    }
+  });
+  return { assurance, credit };
+}
+
 async function loadShared(key, fallback, onError) {
   try {
     const r = await window.storage.get(key, true);
@@ -1308,6 +1333,9 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
               Voir le journal complet <ChevronRight size={13} />
             </button>
           </div>
+          <div className="mb-4">
+            <RecapGrid entries={todayEntries} />
+          </div>
           {todayEntries.length === 0 ? (
             <p className="text-sm py-6 text-center" style={{ color: THEME.navySoft }}>
               Aucune vente déclarée aujourd'hui.
@@ -1393,30 +1421,6 @@ function JournalTab({ session, entries, setEntries, recordDeletion, isManager, m
     }
   };
 
-  // Récapitulatif du jour, une colonne par produit (comme le tableau papier
-  // de l'équipe) : nombre pour les assurances, montant pour les crédits —
-  // PAT et BPR scindés en Papier / eDirect.
-  const dayBreakdown = (dayEntries) => {
-    const assurance = Object.fromEntries(
-      ASSURANCE_TYPES.map((at) => [
-        at,
-        dayEntries.filter((e) => e.type === "assurance" && e.assuranceType === at).reduce((s, e) => s + (e.quantite || 1), 0),
-      ])
-    );
-    const credit = {};
-    CREDIT_TYPES.forEach((ct) => {
-      const matches = dayEntries.filter((e) => e.type === "credit" && e.creditType === ct);
-      if (CONTRACT_MODE_CREDIT_TYPES.includes(ct)) {
-        credit[ct] = Object.fromEntries(
-          CONTRACT_MODES.map((mode) => [mode, matches.filter((e) => e.contractMode === mode).reduce((s, e) => s + (e.montant || 0), 0)])
-        );
-      } else {
-        credit[ct] = matches.reduce((s, e) => s + (e.montant || 0), 0);
-      }
-    });
-    return { assurance, credit };
-  };
-
   return (
     <div className="space-y-5">
       <div className="rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap" style={{ background: THEME.navy, color: "#fff" }}>
@@ -1470,15 +1474,14 @@ function JournalTab({ session, entries, setEntries, recordDeletion, isManager, m
         </div>
       ) : (
         byDay.map(([date, dayEntries]) => {
-          const breakdown = dayBreakdown(dayEntries);
           return (
             <div key={date} className="rounded-2xl overflow-hidden" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
               <div
-                className="px-5 py-3"
+                className="px-5 py-4"
                 style={{ borderBottom: `1px solid ${THEME.line}`, background: THEME.bg }}
               >
-                <div className="text-sm font-semibold capitalize mb-2">{dayLabel(date)}</div>
-                <RecapTable breakdown={breakdown} />
+                <div className="text-sm font-semibold capitalize mb-3">{dayLabel(date)}</div>
+                <RecapGrid entries={dayEntries} />
               </div>
               <div className="p-3 space-y-2">
                 {dayEntries.map((e) => (
@@ -1523,71 +1526,56 @@ function JournalTab({ session, entries, setEntries, recordDeletion, isManager, m
   );
 }
 
-// Récapitulatif du jour en tableau — une colonne par produit, PAT/BPR
-// scindés en Papier/eDirect — reprenant la présentation du tableau papier
-// utilisé par l'équipe. Zone teal = assurances (nombre), zone ambre =
-// crédits (montant financé).
-function RecapTable({ breakdown }) {
-  const cellStyle = { padding: "4px 8px", textAlign: "center", fontVariantNumeric: "tabular-nums" };
-  const Cell = ({ value, format = (v) => v }) => (
-    <td style={cellStyle}>
-      {value > 0 ? (
-        <span className="font-semibold" style={{ color: THEME.navy }}>{format(value)}</span>
-      ) : (
-        <span style={{ color: THEME.line }}>–</span>
-      )}
-    </td>
-  );
-  const Head = ({ children, bg, colSpan, rowSpan }) => (
-    <th
-      colSpan={colSpan}
-      rowSpan={rowSpan}
-      className="text-[10px] font-semibold uppercase tracking-wide whitespace-nowrap"
-      style={{ padding: "4px 8px", background: bg, color: THEME.navySoft, borderBottom: `1px solid ${THEME.line}` }}
-    >
-      {children}
-    </th>
+// Récapitulatif d'un lot de ventes (un jour, "aujourd'hui"…) en grille de
+// puces responsive — une puce par produit, PAT/BPR scindés en
+// Papier/eDirect — reprenant la logique du tableau papier de l'équipe,
+// sans les contraintes d'un vrai tableau (pas de défilement horizontal,
+// s'adapte à toutes les largeurs d'écran). Les puces sans activité
+// s'effacent visuellement (fond neutre, valeur en tiret) pour que l'œil
+// aille droit à ce qui bouge.
+function RecapGrid({ entries }) {
+  const breakdown = entriesBreakdown(entries);
+  const assuranceChips = ASSURANCE_TYPES.map((at) => ({ key: at, label: at, value: breakdown.assurance[at], format: (v) => v }));
+  const creditChips = CREDIT_TYPES.flatMap((ct) =>
+    CONTRACT_MODE_CREDIT_TYPES.includes(ct)
+      ? CONTRACT_MODES.map((mode) => ({ key: `${ct}-${mode}`, label: ct, sublabel: mode, value: breakdown.credit[ct][mode], format: formatEUR }))
+      : [{ key: ct, label: ct, value: breakdown.credit[ct], format: formatEUR }]
   );
 
   return (
-    <div className="overflow-x-auto -mx-1">
-      <table className="border-collapse mx-1" style={{ minWidth: 560 }}>
-        <thead>
-          <tr>
-            {ASSURANCE_TYPES.map((at) => (
-              <Head key={at} bg={THEME.tealSoft} rowSpan={2}>{at}</Head>
-            ))}
-            {CREDIT_TYPES.map((ct) => (
-              <Head key={ct} bg={THEME.amberSoft} colSpan={CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? 2 : 1} rowSpan={CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? 1 : 2}>
-                {ct}
-              </Head>
-            ))}
-          </tr>
-          <tr>
-            {CREDIT_TYPES.filter((ct) => CONTRACT_MODE_CREDIT_TYPES.includes(ct)).flatMap((ct) =>
-              CONTRACT_MODES.map((mode) => (
-                <Head key={`${ct}-${mode}`} bg={THEME.amberSoft}>{mode}</Head>
-              ))
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            {ASSURANCE_TYPES.map((at) => (
-              <Cell key={at} value={breakdown.assurance[at]} />
-            ))}
-            {CREDIT_TYPES.map((ct) =>
-              CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? (
-                CONTRACT_MODES.map((mode) => (
-                  <Cell key={`${ct}-${mode}`} value={breakdown.credit[ct][mode]} format={formatEUR} />
-                ))
-              ) : (
-                <Cell key={ct} value={breakdown.credit[ct]} format={formatEUR} />
-              )
-            )}
-          </tr>
-        </tbody>
-      </table>
+    <div className="space-y-3">
+      <RecapSection title="Assurances" chips={assuranceChips} tint={THEME.tealSoft} accent={THEME.teal} cols="grid-cols-3" />
+      <RecapSection title="Crédits financés" chips={creditChips} tint={THEME.amberSoft} accent={THEME.amber} cols="grid-cols-2 sm:grid-cols-4" />
+    </div>
+  );
+}
+
+function RecapSection({ title, chips, tint, accent, cols }) {
+  return (
+    <div>
+      <div className="text-[11px] font-semibold uppercase tracking-wide mb-1.5" style={{ color: accent }}>
+        {title}
+      </div>
+      <div className={`grid ${cols} gap-1.5`}>
+        {chips.map((c) => (
+          <div
+            key={c.key}
+            className="rounded-lg px-2 py-1.5 text-center transition-colors"
+            style={{ background: c.value > 0 ? tint : THEME.bg }}
+          >
+            <div className="text-[10px] font-medium leading-tight" style={{ color: THEME.navySoft }}>
+              <div className="truncate">{c.label}</div>
+              {c.sublabel && <div className="truncate" style={{ opacity: 0.75 }}>{c.sublabel}</div>}
+            </div>
+            <div
+              className="text-sm font-semibold mt-0.5"
+              style={{ fontFamily: FONT_DISPLAY, color: c.value > 0 ? THEME.navy : THEME.line, fontVariantNumeric: "tabular-nums" }}
+            >
+              {c.value > 0 ? c.format(c.value) : "–"}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1988,6 +1976,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
         const objC = member.objectifCredit ?? 5;
         const objM = member.objectifMontant ?? 5000;
         const declared = entries.filter((e) => e.personId === member.id && e.date.slice(0, 7) === viewMonth);
+        const todayForMember = entries.filter((e) => e.personId === member.id && e.date === todayISO());
         // Le montant vendu et le nombre d'assurances vendues viennent
         // directement du journal déclaré (pas d'un chiffre saisi à la
         // main) : ils reflètent en temps réel ce que le collaborateur a
@@ -2084,6 +2073,15 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
                 isCurrentMonth={isCurrentMonth}
               />
             </div>
+
+            {isCurrentMonth && (
+              <div className="px-5 pb-5">
+                <div className="text-xs font-semibold mb-2 flex items-center gap-1.5" style={{ color: THEME.navySoft }}>
+                  <Calendar size={13} /> Récapitulatif du jour
+                </div>
+                <RecapGrid entries={todayForMember} />
+              </div>
+            )}
 
             <div className="px-5 pb-5">
               <PerformanceChart entries={entries} member={member} />

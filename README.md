@@ -83,7 +83,11 @@ Dans **Suivi & objectifs**, chaque carte collaborateur affiche un graphique lin�
 
 L'onglet **Journal** offre une vue structurée des ventes, jour par jour (au lieu d'une simple liste plate) : chaque jour est une section avec un dossier de détail, et le détail des dossiers déclarés ce jour-là. Un collaborateur y voit son propre journal ; le responsable y voit celui de toute l'équipe, avec le nom du vendeur sur chaque ligne, et peut supprimer n'importe quel dossier (pas seulement les siens). Navigation par mois comme dans "Suivi & objectifs". Dans **Ma saisie**, la carte "Mes ventes du jour" ne montre plus que les ventes du jour même (avec un lien direct vers le Journal complet) — pratique juste après avoir déclaré une vente, sans être noyé dans tout l'historique du mois.
 
-Le récapitulatif de chaque jour reprend la présentation du tableau papier utilisé par l'équipe : un tableau avec une colonne par produit (ALLIN, DIMC, DIM pour les assurances ; PAT, OCA, BPR, MP7, AUG, DIM pour les crédits — PAT et BPR scindés en Papier/eDirect), plutôt qu'un simple total. Zone teal = assurances (nombre), zone ambre = crédits (montant) ; les cases sans activité affichent un tiret plutôt qu'un zéro, pour que l'œil aille directement à ce qui bouge.
+Le récapitulatif de chaque jour reprend la présentation du tableau papier utilisé par l'équipe : une grille de puces responsive avec une puce par produit (ALLIN, DIMC, DIM pour les assurances ; PAT, OCA, BPR, MP7, AUG, DIM pour les crédits — PAT et BPR scindés en Papier/eDirect), plutôt qu'un simple total. Zone teal = assurances (nombre), zone ambre = crédits (montant) ; les puces sans activité s'effacent visuellement (fond neutre, tiret) pour que l'œil aille directement à ce qui bouge. La grille s'adapte à toutes les largeurs d'écran, sans défilement horizontal.
+
+Ce même récapitulatif du jour (« Assurances »/« Crédits financés » en puces) apparaît aussi :
+- dans **Ma saisie**, sous "Mes ventes du jour", pour que le collaborateur suive sa propre journée en un coup d'œil ;
+- dans **Suivi & objectifs**, sur la carte de chaque collaborateur (visible par le responsable comme par le collaborateur lui-même), pour suivre l'avancée du jour de chacun sans avoir à ouvrir le Journal.
 
 ## Crédits financés — saisie quotidienne du responsable
 
