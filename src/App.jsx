@@ -605,6 +605,8 @@ export default function App() {
 
       {toast && (
         <div
+          role="status"
+          aria-live="polite"
           className="sc-toast fixed top-4 right-4 left-4 sm:left-auto z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium flex items-start gap-2 sm:max-w-md"
           style={{ background: toast.isError ? THEME.red : THEME.navy, color: "#fff" }}
         >
@@ -759,17 +761,27 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
 
   const submitManager = async (e) => {
     e.preventDefault();
+    if (busy) return; // évite un double envoi (double-clic, réseau lent)
     setError("");
     const em = email.trim().toLowerCase();
     if (!em || !name.trim()) return setError("Renseignez votre nom et votre e-mail professionnel.");
+    setBusy(true);
     const valid = await verifyManagerCode(code);
-    if (!valid) return setError("Code d'accès responsable incorrect (ou connexion au serveur impossible).");
+    if (!valid) {
+      setBusy(false);
+      return setError("Code d'accès responsable incorrect (ou connexion au serveur impossible).");
+    }
     let existing = members.find((m) => m.email.toLowerCase() === em);
     if (existing) {
       if (existing.role !== "responsable") {
         existing = { ...existing, role: "responsable" };
-        await onCreateMember(members.map((m) => (m.id === existing.id ? existing : m)));
+        const ok = await onCreateMember(members.map((m) => (m.id === existing.id ? existing : m)));
+        if (!ok) {
+          setBusy(false);
+          return setError("Échec de la mise à jour du compte — vérifiez votre connexion et réessayez.");
+        }
       }
+      setBusy(false);
       onLogin(existing);
       return;
     }
@@ -781,8 +793,10 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
       createdAt: new Date().toISOString(),
     };
     const ok = await onCreateMember([...members, newManager]);
+    setBusy(false);
+    if (!ok) return setError("Échec de la création du compte — vérifiez votre connexion et réessayez.");
     onLogin(newManager);
-    if (ok) notify("Accès responsable activé.");
+    notify("Accès responsable activé.");
   };
 
   return (
@@ -1122,7 +1136,6 @@ function PasswordInput({ value, onChange, placeholder = "•••••••�
       <button
         type="button"
         onClick={() => setVisible((v) => !v)}
-        tabIndex={-1}
         className="absolute right-0 top-0 bottom-0 px-3 flex items-center"
         aria-label={visible ? "Masquer le mot de passe" : "Afficher le mot de passe"}
       >
@@ -1306,6 +1319,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
   const [montant, setMontant] = useState("");
   const [date, setDate] = useState(todayISO());
   const [editingEntryId, setEditingEntryId] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const needsContractMode = type === "credit" && CONTRACT_MODE_CREDIT_TYPES.includes(creditType);
 
@@ -1347,7 +1361,15 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
 
   const submit = async (e) => {
     e.preventDefault();
-    if (!dossier.trim()) return notify("Indiquez le numéro de dossier.");
+    if (submitting) return; // évite un double envoi (double-clic, réseau lent)
+    if (!dossier.trim()) return notify("Indiquez le numéro de dossier.", true);
+    if (type === "assurance" && (!Number.isFinite(Number(quantite)) || Number(quantite) <= 0)) {
+      return notify("Le nombre d'assurances vendues doit être supérieur à 0.", true);
+    }
+    if (type === "credit" && (!Number.isFinite(Number(montant)) || Number(montant) <= 0)) {
+      return notify("Indiquez un montant supérieur à 0.", true);
+    }
+    setSubmitting(true);
     const entryData = {
       personId: session.id,
       personName: session.name,
@@ -1376,6 +1398,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
           : `Crédit ${creditType}${needsContractMode ? ` (${contractMode})` : ""} enregistré.`
       );
     }
+    setSubmitting(false);
   };
 
   const remove = async (id) => {
@@ -1536,9 +1559,11 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
           <div className="flex gap-2">
             <button
               type="submit"
-              className="flex-1 py-2.5 rounded-lg text-sm font-semibold text-white"
+              disabled={submitting}
+              className="sc-btn flex-1 py-2.5 rounded-lg text-sm font-semibold text-white flex items-center justify-center gap-1.5 disabled:opacity-60"
               style={{ background: THEME.teal }}
             >
+              {submitting && <Loader2 size={15} className="animate-spin" />}
               {editingEntryId ? "Enregistrer les modifications" : "Enregistrer"}
             </button>
             {editingEntryId && (
@@ -1853,6 +1878,7 @@ function ConfirmActionButton({
   icon: Icon = Trash2,
   color = THEME.red,
   iconOnly = true,
+  disabled = false,
 }) {
   const [armed, setArmed] = useState(false);
 
@@ -1867,11 +1893,12 @@ function ConfirmActionButton({
       <div className="flex items-center gap-1 flex-shrink-0">
         <button
           type="button"
+          disabled={disabled}
           onClick={() => {
             setArmed(false);
             onConfirm();
           }}
-          className="px-2 py-1 rounded-md text-xs font-semibold text-white whitespace-nowrap"
+          className="px-2 py-1 rounded-md text-xs font-semibold text-white whitespace-nowrap disabled:opacity-60"
           style={{ background: color }}
         >
           {confirmLabel}
@@ -1892,8 +1919,9 @@ function ConfirmActionButton({
     return (
       <button
         type="button"
+        disabled={disabled}
         onClick={() => setArmed(true)}
-        className="p-2 rounded-md flex-shrink-0"
+        className="p-2 rounded-md flex-shrink-0 disabled:opacity-60"
         aria-label={label}
       >
         <Icon size={14} style={{ color }} />
@@ -1904,8 +1932,9 @@ function ConfirmActionButton({
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={() => setArmed(true)}
-      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg whitespace-nowrap transition-opacity hover:opacity-90"
+      className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg whitespace-nowrap transition-opacity hover:opacity-90 disabled:opacity-60"
       style={{ background: color, color: "#fff" }}
     >
       <Icon size={14} /> {label}
@@ -1964,8 +1993,15 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
   // avec une grande équipe (50 collaborateurs et plus).
   const [selectedMemberId, setSelectedMemberId] = useState(null);
   const [memberSearch, setMemberSearch] = useState("");
+  // Un seul indicateur "en cours d'enregistrement" pour les 3 actions
+  // d'écriture ci-dessous (objectifs généraux, objectifs individuels,
+  // crédits du jour) — désactive le bouton concerné le temps de l'appel
+  // réseau pour éviter un double envoi (double-clic, réseau lent).
+  const [saving, setSaving] = useState(false);
 
   const applyGeneralObjectives = async () => {
+    if (saving) return;
+    setSaving(true);
     const updated = members.map((m) =>
       m.role === "collaborateur"
         ? {
@@ -1978,6 +2014,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
     );
     const ok = await setMembers(updated);
     if (ok) notify(`Objectifs généraux appliqués à ${collaborators.length} collaborateur(s).`);
+    setSaving(false);
   };
 
   // Recharge la saisie du jour (nombre + montant par type de crédit, et par
@@ -2021,6 +2058,8 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
   };
 
   const saveEdit = async (member) => {
+    if (saving) return;
+    setSaving(true);
     const ok = await setMembers(
       members.map((m) =>
         m.id === member.id
@@ -2039,6 +2078,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
       setEditing(null);
       notify(`Objectifs mis à jour — ${member.name}`);
     }
+    setSaving(false);
   };
 
   // Remplace (upsert) la saisie de crédits financés du jour choisi pour ce
@@ -2047,6 +2087,8 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
   // retirée). PAT et BPR produisent jusqu'à 2 enregistrements (Papier +
   // eDirect), les autres types un seul.
   const saveCreditRecords = async (member) => {
+    if (saving) return;
+    setSaving(true);
     const others = creditRecords.filter((r) => !(r.memberId === member.id && r.date === creditDate));
     const baseRecord = {
       id: undefined,
@@ -2087,6 +2129,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
     });
     const ok = await setCreditRecords([...additions, ...others]);
     if (ok) notify(`Crédits enregistrés pour le ${new Date(creditDate + "T00:00:00").toLocaleDateString("fr-FR")} — ${member.name}`);
+    setSaving(false);
   };
 
   const visibleMembers = isManager ? collaborators : collaborators.filter((m) => m.id === session.id);
@@ -2274,6 +2317,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
             icon={Users}
             color={MANAGER_ACCENT}
             iconOnly={false}
+            disabled={saving}
           />
         </div>
       )}
@@ -2312,12 +2356,14 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
               value={memberSearch}
               onChange={(e) => setMemberSearch(e.target.value)}
               placeholder="Rechercher un nom ou un e-mail…"
+              aria-label="Rechercher un collaborateur"
               className="flex-1 px-3 py-2 rounded-lg text-sm"
               style={{ border: `1px solid ${THEME.line}` }}
             />
             <select
               value={selectedMemberId || ""}
               onChange={(e) => setSelectedMemberId(e.target.value)}
+              aria-label="Choisir un collaborateur"
               className="px-3 py-2 rounded-lg text-sm sm:w-64 flex-shrink-0"
               style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
             >
@@ -2392,6 +2438,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
               changeCreditDate={changeCreditDate}
               saveEdit={saveEdit}
               saveCreditRecords={saveCreditRecords}
+              saving={saving}
             />
           )
         )
@@ -2424,6 +2471,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
             changeCreditDate={changeCreditDate}
             saveEdit={saveEdit}
             saveCreditRecords={saveCreditRecords}
+            saving={saving}
           />
         ))
       )}
@@ -2458,7 +2506,7 @@ function StatusBadge({ status }) {
 function MemberDetailCard({
   member, session, isManager, viewMonth, isCurrentMonth, entries, monthFigures, creditRecords,
   editingId, setEditing, objDraft, setObjDraft, objByTypeDraft, setObjByTypeDraft,
-  creditDate, creditDraft, setCreditDraft, startEdit, changeCreditDate, saveEdit, saveCreditRecords,
+  creditDate, creditDraft, setCreditDraft, startEdit, changeCreditDate, saveEdit, saveCreditRecords, saving,
 }) {
   const isEditing = editingId === member.id;
   const {
@@ -2662,9 +2710,11 @@ function MemberDetailCard({
             </div>
             <button
               onClick={() => saveCreditRecords(member)}
-              className="w-full py-2 rounded-lg text-sm font-semibold text-white transition-opacity hover:opacity-90"
+              disabled={saving}
+              className="sc-btn w-full py-2 rounded-lg text-sm font-semibold text-white transition-opacity hover:opacity-90 disabled:opacity-60 flex items-center justify-center gap-1.5"
               style={{ background: THEME.amber }}
             >
+              {saving && <Loader2 size={14} className="animate-spin" />}
               Enregistrer les crédits du {new Date(creditDate + "T00:00:00").toLocaleDateString("fr-FR")}
             </button>
           </div>
@@ -2710,9 +2760,11 @@ function MemberDetailCard({
           <div className="flex gap-2">
             <button
               onClick={() => saveEdit(member)}
-              className="flex-1 py-2 rounded-lg text-sm font-semibold text-white"
+              disabled={saving}
+              className="sc-btn flex-1 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-60 flex items-center justify-center gap-1.5"
               style={{ background: MANAGER_ACCENT }}
             >
+              {saving && <Loader2 size={14} className="animate-spin" />}
               Enregistrer les objectifs
             </button>
             <button
@@ -3181,6 +3233,7 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
   const [resetCode, setResetCode] = useState("");
   const [resetBusy, setResetBusy] = useState(false);
   const [resetError, setResetError] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
 
   const startReset = (id) => {
     setResettingId(id);
@@ -3216,11 +3269,13 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
 
   const createInvite = async (e) => {
     e.preventDefault();
+    if (inviteBusy) return; // évite un double envoi (double-clic, réseau lent)
     setInviteError("");
     const em = inviteEmail.trim().toLowerCase();
     if (!em || !inviteName.trim()) return setInviteError("Renseignez le nom et l'e-mail du collaborateur à inviter.");
     if (members.find((m) => m.email.toLowerCase() === em)) return setInviteError("Un compte existe déjà avec cet e-mail.");
     if (pendingInvites.find((i) => i.email.toLowerCase() === em)) return setInviteError("Une invitation est déjà en attente pour cet e-mail.");
+    setInviteBusy(true);
     const invite = {
       id: uid(),
       token: inviteToken(),
@@ -3237,6 +3292,7 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
       setInviteEmail("");
       notify("Invitation créée. Copiez le lien et envoyez-le au collaborateur.");
     }
+    setInviteBusy(false);
   };
 
   const revokeInvite = async (id) => {
@@ -3295,10 +3351,11 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
           </div>
           <button
             type="submit"
-            className="px-3.5 py-2 rounded-lg text-sm font-semibold text-white flex items-center gap-1.5"
+            disabled={inviteBusy}
+            className="sc-btn px-3.5 py-2 rounded-lg text-sm font-semibold text-white flex items-center gap-1.5 disabled:opacity-60"
             style={{ background: MANAGER_ACCENT }}
           >
-            <Plus size={15} /> Générer le lien
+            {inviteBusy ? <Loader2 size={15} className="animate-spin" /> : <Plus size={15} />} Générer le lien
           </button>
         </form>
         {inviteError && (

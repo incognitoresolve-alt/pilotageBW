@@ -26,6 +26,12 @@ Palette "navy & laiton" façon banque privée (bleu marine très profond, laiton
 
 **Mobile** : l'application est utilisable sur téléphone (aucun défilement horizontal parasite, quel que soit l'onglet). Le bandeau d'onglets défile horizontalement au doigt sur les petits écrans plutôt que de déborder de l'écran ; les toasts s'étalent en pleine largeur (marges de 1rem) au lieu de risquer de sortir du cadre. Attention en ajoutant de nouvelles grilles responsives (`sm:grid-cols-N`, `md:grid-cols-N`) : toujours poser une classe `grid-cols-1` de base avant le préfixe — sans elle, Tailwind ne génère pas le `minmax(0, 1fr)` qui empêche un contenu large de faire déborder toute la page sur mobile (bug rencontré et corrigé sur plusieurs grilles de l'app).
 
+## Robustesse des formulaires
+
+Tous les boutons qui déclenchent un enregistrement réseau (nouvelle vente, connexion responsable, objectifs, crédits du jour, invitation d'un collaborateur…) sont protégés contre le double envoi : un état "en cours" désactive le bouton et affiche un indicateur de chargement pendant l'appel, jusqu'à la fin de la requête — un double-clic ou une connexion lente ne peut donc pas créer deux fois la même donnée. Les actions destructrices (suppression d'un dossier, retrait d'un membre, révocation d'une invitation, restauration depuis l'historique) passent toutes par un bouton à double confirmation (`ConfirmActionButton`) : un premier clic arme un bouton "Confirmer" affiché quelques secondes, le second déclenche réellement l'action.
+
+Les champs numériques critiques (nombre d'assurances vendues, montant d'un crédit) refusent une valeur nulle ou négative, à la fois via l'attribut HTML `min` (le navigateur bloque la soumission avant même que le code ne s'exécute) et via une vérification côté application pour les cas que `min` ne couvre pas — avec un message d'erreur explicite dans les deux cas.
+
 ## Backend
 
 Le backend (`worker/index.js`) est un **Cloudflare Worker** unique qui sert à la fois les fichiers statiques du build (`dist/`, via le binding `ASSETS` déclaré dans `wrangler.toml`) et une API clé/valeur (`GET/PUT /api/storage/:key`) adossée à un namespace **Cloudflare KV**. C'est là que sont stockés les membres, les ventes déclarées et les chiffres officiels du mois — partagés par tous les utilisateurs, quel que soit leur navigateur ou appareil, sans serveur à gérer.
