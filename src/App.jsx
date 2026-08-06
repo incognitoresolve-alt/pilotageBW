@@ -200,17 +200,22 @@ function entriesBreakdown(scopedEntries) {
     ])
   );
   const credit = {};
+  const creditCount = {};
   CREDIT_TYPES.forEach((ct) => {
     const matches = scopedEntries.filter((e) => e.type === "credit" && e.creditType === ct);
     if (CONTRACT_MODE_CREDIT_TYPES.includes(ct)) {
       credit[ct] = Object.fromEntries(
         CONTRACT_MODES.map((mode) => [mode, matches.filter((e) => e.contractMode === mode).reduce((s, e) => s + (e.montant || 0), 0)])
       );
+      creditCount[ct] = Object.fromEntries(
+        CONTRACT_MODES.map((mode) => [mode, matches.filter((e) => e.contractMode === mode).length])
+      );
     } else {
       credit[ct] = matches.reduce((s, e) => s + (e.montant || 0), 0);
+      creditCount[ct] = matches.length;
     }
   });
-  return { assurance, credit };
+  return { assurance, credit, creditCount };
 }
 
 async function loadShared(key, fallback, onError) {
@@ -1547,8 +1552,15 @@ function RecapGrid({ entries, showAssurance = true, creditTitle = "Crédits fina
   const assuranceChips = ASSURANCE_TYPES.map((at) => ({ key: at, label: at, value: breakdown.assurance[at], format: (v) => v }));
   const creditChips = CREDIT_TYPES.flatMap((ct) =>
     CONTRACT_MODE_CREDIT_TYPES.includes(ct)
-      ? CONTRACT_MODES.map((mode) => ({ key: `${ct}-${mode}`, label: ct, sublabel: mode, value: breakdown.credit[ct][mode], format: formatEUR }))
-      : [{ key: ct, label: ct, value: breakdown.credit[ct], format: formatEUR }]
+      ? CONTRACT_MODES.map((mode) => ({
+          key: `${ct}-${mode}`,
+          label: ct,
+          sublabel: mode,
+          value: breakdown.credit[ct][mode],
+          count: breakdown.creditCount[ct][mode],
+          format: formatEUR,
+        }))
+      : [{ key: ct, label: ct, value: breakdown.credit[ct], count: breakdown.creditCount[ct], format: formatEUR }]
   );
 
   return (
@@ -1575,7 +1587,12 @@ function RecapSection({ title, chips, tint, accent, cols }) {
             style={{ background: c.value > 0 ? tint : THEME.bg }}
           >
             <div className="text-[10px] font-medium leading-tight" style={{ color: THEME.navySoft }}>
-              <div className="truncate">{c.label}</div>
+              <div className="truncate">
+                {c.count > 0 && (
+                  <span className="font-semibold" style={{ color: accent }}>({c.count}) </span>
+                )}
+                {c.label}
+              </div>
               {c.sublabel && <div className="truncate" style={{ opacity: 0.75 }}>{c.sublabel}</div>}
             </div>
             <div
@@ -1975,18 +1992,6 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
         </div>
       )}
 
-      {collaborators.length > 0 && (
-        <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
-          <PerformanceChart
-            entries={entries}
-            personId={null}
-            ariaName={null}
-            title="Performance équipe — Assurances DirectSales"
-            color={THEME.yellow}
-          />
-        </div>
-      )}
-
       {visibleMembers.length === 0 && (
         <p className="text-sm text-center py-10" style={{ color: THEME.navySoft }}>
           Aucun collaborateur pour l'instant.
@@ -2042,10 +2047,10 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
               {isManager && !isEditing && (
                 <button
                   onClick={() => startEdit(member)}
-                  className="text-xs font-medium px-3 py-1.5 rounded-lg"
-                  style={{ background: THEME.bg, color: MANAGER_ACCENT }}
+                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-opacity hover:opacity-90 flex-shrink-0"
+                  style={{ background: MANAGER_ACCENT, color: "#fff" }}
                 >
-                  Mettre à jour
+                  <Pencil size={13} /> Mettre à jour
                 </button>
               )}
             </div>
@@ -2107,7 +2112,17 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
             )}
 
             <div className="px-5 pb-5">
-              <PerformanceChart entries={entries} personId={member.id} ariaName={member.name} color={THEME.yellow} />
+              <PerformanceChart
+                entries={entries}
+                lines={
+                  isManager
+                    ? [
+                        { key: "self", personId: member.id, label: member.name, color: THEME.yellow },
+                        { key: "team", personId: null, label: "Équipe DirectSales", color: THEME.navy },
+                      ]
+                    : [{ key: "self", personId: member.id, label: member.name, color: THEME.yellow }]
+                }
+              />
             </div>
 
             {isEditing && (
@@ -2419,13 +2434,13 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
 // Graphique linéaire de performance (dossiers vendus) d'un collaborateur —
 // bascule Jour/Semaine/Mois/Année, survol avec repère + infobulle, et un
 // détail sous forme de tableau (accessible sans passer par la souris).
-function PerformanceChart({ entries, personId = null, ariaName, title = "Performance — assurances vendues", color = THEME.yellow }) {
+function PerformanceChart({ entries, lines, title = "Performance — assurances vendues" }) {
   const [granularity, setGranularity] = useState("mois");
   const [hoverIdx, setHoverIdx] = useState(null);
 
-  const series = useMemo(
-    () => performanceSeries(entries, personId, granularity),
-    [entries, personId, granularity]
+  const linesData = useMemo(
+    () => lines.map((l) => ({ ...l, data: performanceSeries(entries, l.personId, granularity) })),
+    [entries, lines, granularity]
   );
 
   const W = 600;
@@ -2436,20 +2451,24 @@ function PerformanceChart({ entries, personId = null, ariaName, title = "Perform
   const padB = 26;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
-  const n = series.length;
-  const maxVal = Math.max(1, ...series.map((b) => b.value));
+  const n = linesData[0].data.length;
+  const maxVal = Math.max(1, ...linesData.flatMap((l) => l.data.map((b) => b.value)));
+  const multi = linesData.length > 1;
 
-  const points = series.map((b, i) => ({
-    x: n > 1 ? padL + (i * plotW) / (n - 1) : padL + plotW / 2,
-    y: padT + plotH - (b.value / maxVal) * plotH,
-    ...b,
-  }));
-  const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
-  const areaPath = `${linePath} L ${points[n - 1].x.toFixed(1)},${(padT + plotH).toFixed(1)} L ${points[0].x.toFixed(1)},${(padT + plotH).toFixed(1)} Z`;
+  const xFor = (i) => (n > 1 ? padL + (i * plotW) / (n - 1) : padL + plotW / 2);
+  const yFor = (v) => padT + plotH - (v / maxVal) * plotH;
 
-  const total = series.reduce((s, b) => s + b.value, 0);
-  const last = points[n - 1];
-  const active = hoverIdx !== null ? points[hoverIdx] : null;
+  const linesGeom = linesData.map((l) => {
+    const points = l.data.map((b, i) => ({ x: xFor(i), y: yFor(b.value), ...b }));
+    const linePath = points.map((p, i) => `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+    return { ...l, points, linePath };
+  });
+  const areaPath = !multi
+    ? `${linesGeom[0].linePath} L ${linesGeom[0].points[n - 1].x.toFixed(1)},${(padT + plotH).toFixed(1)} L ${linesGeom[0].points[0].x.toFixed(1)},${(padT + plotH).toFixed(1)} Z`
+    : null;
+
+  const activeIdx = hoverIdx;
+  const bucket = linesData[0].data;
 
   const handleMove = (e) => {
     const rect = e.currentTarget.getBoundingClientRect();
@@ -2461,11 +2480,15 @@ function PerformanceChart({ entries, personId = null, ariaName, title = "Perform
   // chevauchement quand il y a beaucoup de périodes (ex. 14 jours).
   const labelEvery = n > 8 ? 2 : 1;
 
+  const ariaLabel = `Évolution des assurances vendues ${
+    multi ? `— ${linesGeom.map((l) => l.label).join(" et ")}` : linesGeom[0].personId ? `par ${linesGeom[0].label}` : "pour toute l'équipe"
+  }, par ${granularity}`;
+
   return (
     <div className="rounded-xl p-4" style={{ background: THEME.bg }}>
       <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
         <div className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: THEME.navySoft }}>
-          <BarChart3 size={14} style={{ color }} /> {title}
+          <BarChart3 size={14} style={{ color: linesGeom[0].color }} /> {title}
         </div>
         <div className="flex gap-1 rounded-lg p-0.5" style={{ background: THEME.card }}>
           {PERIOD_OPTIONS.map((p) => (
@@ -2488,6 +2511,8 @@ function PerformanceChart({ entries, personId = null, ariaName, title = "Perform
         </div>
       </div>
 
+      {multi && <ChartLegend lines={linesGeom} />}
+
       <div className="relative">
         <svg
           viewBox={`0 0 ${W} ${H}`}
@@ -2496,74 +2521,126 @@ function PerformanceChart({ entries, personId = null, ariaName, title = "Perform
           onMouseMove={handleMove}
           onMouseLeave={() => setHoverIdx(null)}
           role="img"
-          aria-label={`Évolution des assurances vendues ${ariaName ? `par ${ariaName}` : "pour toute l'équipe"}, par ${granularity}`}
+          aria-label={ariaLabel}
         >
           <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={THEME.line} strokeWidth="1" />
-          <path d={areaPath} fill={color} opacity="0.1" stroke="none" />
-          <path d={linePath} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+          {areaPath && <path d={areaPath} fill={linesGeom[0].color} opacity="0.1" stroke="none" />}
 
-          {active && (
-            <line x1={active.x} y1={padT} x2={active.x} y2={padT + plotH} stroke={THEME.navySoft} strokeWidth="1" opacity="0.35" />
-          )}
-          <circle cx={last.x} cy={last.y} r="5" fill={color} stroke={THEME.bg} strokeWidth="2" />
-          {active && active !== last && (
-            <circle cx={active.x} cy={active.y} r="5" fill={color} stroke={THEME.bg} strokeWidth="2" />
+          {activeIdx !== null && (
+            <line x1={xFor(activeIdx)} y1={padT} x2={xFor(activeIdx)} y2={padT + plotH} stroke={THEME.navySoft} strokeWidth="1" opacity="0.35" />
           )}
 
-          {points.map((p, i) =>
+          {linesGeom.map((l) => (
+            <path key={l.key} d={l.linePath} fill="none" stroke={l.color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+          ))}
+          {linesGeom.map((l) => {
+            const last = l.points[n - 1];
+            const activePoint = activeIdx !== null ? l.points[activeIdx] : null;
+            return (
+              <g key={l.key}>
+                <circle cx={last.x} cy={last.y} r="5" fill={l.color} stroke={THEME.bg} strokeWidth="2" />
+                {activePoint && activePoint !== last && (
+                  <circle cx={activePoint.x} cy={activePoint.y} r="5" fill={l.color} stroke={THEME.bg} strokeWidth="2" />
+                )}
+              </g>
+            );
+          })}
+
+          {bucket.map((b, i) =>
             i % labelEvery === 0 || i === n - 1 ? (
-              <text
-                key={p.startISO}
-                x={p.x}
-                y={H - 6}
-                fontSize="9"
-                textAnchor="middle"
-                fill={THEME.navySoft}
-              >
-                {p.label}
+              <text key={b.startISO} x={xFor(i)} y={H - 6} fontSize="9" textAnchor="middle" fill={THEME.navySoft}>
+                {b.label}
               </text>
             ) : null
           )}
         </svg>
 
-        {active && (
+        {activeIdx !== null && (
           <div
             className="absolute top-0 px-2.5 py-1.5 rounded-lg text-xs shadow-md pointer-events-none"
             style={{
-              left: `${Math.min(92, Math.max(8, (active.x / W) * 100))}%`,
+              left: `${Math.min(92, Math.max(8, (xFor(activeIdx) / W) * 100))}%`,
               transform: "translateX(-50%)",
               background: THEME.navy,
               color: "#fff",
               whiteSpace: "nowrap",
             }}
           >
-            <div className="font-semibold" style={{ fontFamily: FONT_DISPLAY }}>{active.value}</div>
-            <div style={{ color: "rgba(255,255,255,0.7)" }}>{active.fullLabel}</div>
+            <div style={{ color: "rgba(255,255,255,0.7)" }}>{bucket[activeIdx].fullLabel}</div>
+            {linesGeom.map((l) => (
+              <div key={l.key} className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: l.color }} />
+                <span className="font-semibold" style={{ fontFamily: FONT_DISPLAY }}>{l.points[activeIdx].value}</span>
+                {multi && <span style={{ color: "rgba(255,255,255,0.7)" }}>{l.label}</span>}
+              </div>
+            ))}
           </div>
         )}
       </div>
 
-      <div className="text-xs mt-1" style={{ color: THEME.navySoft }}>
-        Total sur la période : <strong style={{ color: THEME.navy }}>{total}</strong>
-      </div>
-      <PerformanceTable series={series} />
+      {!multi ? (
+        <div className="text-xs mt-1" style={{ color: THEME.navySoft }}>
+          Total sur la période : <strong style={{ color: THEME.navy }}>{linesGeom[0].data.reduce((s, b) => s + b.value, 0)}</strong>
+        </div>
+      ) : (
+        <div className="flex items-center gap-4 flex-wrap text-xs mt-1" style={{ color: THEME.navySoft }}>
+          {linesGeom.map((l) => (
+            <div key={l.key} className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: l.color }} />
+              Total {l.label} : <strong style={{ color: THEME.navy }}>{l.data.reduce((s, b) => s + b.value, 0)}</strong>
+            </div>
+          ))}
+        </div>
+      )}
+      <PerformanceTable buckets={bucket} lines={linesGeom} />
+    </div>
+  );
+}
+
+// Puces couleur + libellé, une par série — n'apparaît que si le graphique
+// affiche plusieurs séries (jamais pour une seule courbe).
+function ChartLegend({ lines }) {
+  return (
+    <div className="flex items-center gap-3 flex-wrap mb-1.5">
+      {lines.map((l) => (
+        <div key={l.key} className="flex items-center gap-1.5 text-[11px] font-medium" style={{ color: THEME.navySoft }}>
+          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: l.color }} />
+          {l.label}
+        </div>
+      ))}
     </div>
   );
 }
 
 // Version tabulaire des mêmes données, repliée par défaut — équivalent
 // accessible du graphique (lecteur d'écran, sans survol nécessaire).
-function PerformanceTable({ series }) {
+// Chaque puce affiche la valeur de chaque série (avec pastille couleur si
+// plusieurs séries) pour la période correspondante.
+function PerformanceTable({ buckets, lines }) {
+  const multi = lines.length > 1;
   return (
     <details className="mt-1">
       <summary className="text-xs cursor-pointer font-medium" style={{ color: THEME.navySoft }}>
         Détail chiffré par période
       </summary>
-      <div className="mt-2 grid grid-cols-3 sm:grid-cols-4 gap-1.5">
-        {series.map((b) => (
+      <div className={`mt-2 grid gap-1.5 ${multi ? "grid-cols-2 sm:grid-cols-3" : "grid-cols-3 sm:grid-cols-4"}`}>
+        {buckets.map((b, i) => (
           <div key={b.startISO} className="text-xs px-2 py-1.5 rounded-lg text-center" style={{ background: THEME.card }}>
-            <div className="font-semibold" style={{ color: THEME.navy }}>{b.value}</div>
             <div style={{ color: THEME.navySoft }}>{b.label}</div>
+            {!multi ? (
+              <div className="font-semibold mt-0.5" style={{ color: THEME.navy, fontVariantNumeric: "tabular-nums" }}>
+                {lines[0].data[i].value}
+              </div>
+            ) : (
+              <div className="flex flex-col gap-0.5 mt-0.5">
+                {lines.map((l) => (
+                  <div key={l.key} className="flex items-center justify-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: l.color }} />
+                    <span className="font-semibold" style={{ color: THEME.navy, fontVariantNumeric: "tabular-nums" }}>{l.data[i].value}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -2588,10 +2665,9 @@ function ClassementTab({ members, entries, figures, creditRecords, mKey }) {
           const f = monthFigures[m.id] || emptyFigures();
           const declared = entries.filter((e) => e.personId === m.id && e.date.slice(0, 7) === mKey);
           const assurances = declared.filter((e) => e.type === "assurance").reduce((s, e) => s + (e.quantite || 1), 0);
-          const montantVendu = declared.reduce((s, e) => s + (e.montant || 0), 0);
           const creditParType = creditRealiseParTypeFor(f, creditRecords, m.id, mKey);
           const creditsTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditParType[ct] || 0), 0);
-          return { member: m, assurances, montantVendu, creditsTotal };
+          return { member: m, assurances, creditsTotal };
         })
         .sort((a, b) => b.creditsTotal - a.creditsTotal),
     [collaborators, entries, monthFigures, creditRecords, mKey]
@@ -2619,8 +2695,11 @@ function ClassementTab({ members, entries, figures, creditRecords, mKey }) {
           {ranked.map((r, i) => (
             <div
               key={r.member.id}
-              className="flex items-center gap-3 px-5 py-4 flex-wrap sm:flex-nowrap"
-              style={{ borderBottom: i < ranked.length - 1 ? `1px solid ${THEME.line}` : "none" }}
+              className="flex items-center gap-3 px-5 py-4 flex-wrap sm:flex-nowrap transition-colors hover:brightness-[0.98]"
+              style={{
+                borderBottom: i < ranked.length - 1 ? `1px solid ${THEME.line}` : "none",
+                background: i === 0 ? `${THEME.yellowSoft}` : "transparent",
+              }}
             >
               <div
                 className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
@@ -2634,29 +2713,21 @@ function ClassementTab({ members, entries, figures, creditRecords, mKey }) {
                   {r.member.email}
                 </div>
               </div>
-              <div className="flex items-center gap-4 flex-shrink-0 text-right ml-11 sm:ml-0">
+              <div className="flex items-center gap-5 flex-shrink-0 text-right ml-11 sm:ml-0">
                 <div>
                   <div className="text-[10px] uppercase tracking-wide" style={{ color: THEME.navySoft }}>
                     Assurances
                   </div>
-                  <div className="text-sm font-semibold" style={{ fontFamily: FONT_DISPLAY, color: THEME.teal }}>
+                  <div className="text-base font-semibold" style={{ fontFamily: FONT_DISPLAY, color: THEME.teal }}>
                     {r.assurances}
                   </div>
                 </div>
                 <div>
                   <div className="text-[10px] uppercase tracking-wide" style={{ color: THEME.navySoft }}>
-                    Crédits
+                    Crédits financés
                   </div>
-                  <div className="text-sm font-semibold" style={{ fontFamily: FONT_DISPLAY, color: THEME.amber }}>
+                  <div className="text-base font-semibold" style={{ fontFamily: FONT_DISPLAY, color: THEME.amber }}>
                     {formatEUR(r.creditsTotal)}
-                  </div>
-                </div>
-                <div className="hidden sm:block">
-                  <div className="text-[10px] uppercase tracking-wide" style={{ color: THEME.navySoft }}>
-                    Montant vendu
-                  </div>
-                  <div className="text-sm font-semibold" style={{ fontFamily: FONT_DISPLAY, color: THEME.navy }}>
-                    {formatEUR(r.montantVendu)}
                   </div>
                 </div>
               </div>

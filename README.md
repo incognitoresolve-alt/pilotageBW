@@ -77,23 +77,23 @@ Dans l'onglet **Suivi & objectifs**, le responsable dispose d'un bouton **Export
 
 ## Graphique de performance (assurances)
 
-Dans **Suivi & objectifs**, un graphique linéaire jaune "Performance — assurances vendues" affiche le nombre d'assurances déclarées (pondéré par la quantité). Il apparaît à deux niveaux :
-- un graphique **équipe** ("Performance équipe — Assurances DirectSales"), agrégeant tous les collaborateurs, en haut de l'onglet — visible par le responsable et les collaborateurs ;
-- un graphique **par collaborateur**, sur sa carte.
+Dans **Suivi & objectifs**, chaque collaborateur a un graphique linéaire "Performance — assurances vendues" (nombre d'assurances déclarées, pondéré par la quantité), sur sa carte.
 
-Quatre bascules — **Jour** (14 derniers jours), **Semaine** (8 dernières semaines), **Mois** (6 derniers mois), **Année** (5 dernières années) — recalculent la série depuis le journal des ventes déclarées, tous mois confondus (contrairement au reste de l'onglet qui reste centré sur le mois consulté). Survoler le graphique affiche un repère + une infobulle ; un détail chiffré par période (tableau) est disponible sous le graphique, replié par défaut, pour un accès sans souris.
+Côté **responsable**, ce graphique est **fusionné** : une seule courbe jaune pour le collaborateur et une seule courbe bleu marine pour l'équipe complète ("Équipe DirectSales"), distinguées par une légende (pastille de couleur + libellé) — jamais deux graphiques séparés. Le survol affiche une infobulle unique donnant la valeur des deux séries pour la période pointée. Côté **collaborateur**, seule sa propre courbe est affichée (pas de légende, pas de données d'équipe — la performance globale de l'équipe reste réservée à l'interface responsable).
 
-Côté **responsable**, la carte de chaque collaborateur dans Suivi & objectifs se limite désormais aux chiffres-clés (Assurances/Crédits/Montant) et à ce graphique — le récapitulatif du jour (voir plus bas) n'y apparaît plus, pour rester concentré sur la performance. Un collaborateur continue de voir son propre récapitulatif du jour sur sa carte.
+Quatre bascules — **Jour** (14 derniers jours), **Semaine** (8 dernières semaines), **Mois** (6 derniers mois), **Année** (5 dernières années) — recalculent la ou les séries depuis le journal des ventes déclarées, tous mois confondus (contrairement au reste de l'onglet qui reste centré sur le mois consulté). Un détail chiffré par période (tableau) est disponible sous le graphique, replié par défaut, pour un accès sans souris.
+
+La carte de chaque collaborateur dans Suivi & objectifs se limite, côté responsable, aux chiffres-clés (Assurances/Crédits/Montant) et à ce graphique — le récapitulatif du jour (voir plus bas) n'y apparaît plus, pour rester concentré sur la performance. Un collaborateur continue de voir son propre récapitulatif du jour sur sa carte.
 
 ## Classement
 
-L'onglet **Classement** (visible par tous, responsable comme collaborateurs) liste les collaborateurs du mois en cours, triés par **crédits financés** (le chiffre officiel validé par le responsable) — il se met donc à jour dès qu'un responsable enregistre une saisie de crédits du jour. Les 3 premiers ont un badge de rang coloré (or/argent/bronze) ; le nombre d'assurances et le montant vendu (déclarés par le collaborateur) sont affichés à titre de repère à côté du classement.
+L'onglet **Classement** (visible par tous, responsable comme collaborateurs) liste les collaborateurs du mois en cours, triés par **crédits financés** (le chiffre officiel validé par le responsable) — il se met donc à jour dès qu'un responsable enregistre une saisie de crédits du jour. Les 3 premiers ont un badge de rang coloré (or/argent/bronze) ; seuls le nombre d'**assurances** et le **montant des crédits financés** sont affichés à côté du classement.
 
 ## Journal des ventes
 
 L'onglet **Journal** offre une vue structurée des ventes, jour par jour (au lieu d'une simple liste plate) : chaque jour est une section avec un dossier de détail, et le détail des dossiers déclarés ce jour-là. Un collaborateur y voit son propre journal ; le responsable y voit celui de toute l'équipe, avec le nom du vendeur sur chaque ligne, et peut supprimer n'importe quel dossier (pas seulement les siens). Navigation par mois comme dans "Suivi & objectifs". Dans **Ma saisie**, la carte "Mes ventes du jour" ne montre plus que les ventes du jour même (avec un lien direct vers le Journal complet) — pratique juste après avoir déclaré une vente, sans être noyé dans tout l'historique du mois.
 
-Le récapitulatif de chaque jour reprend la présentation du tableau papier utilisé par l'équipe : une grille de puces responsive avec une puce par produit (ALLIN, DIMC, DIM pour les assurances ; PAT, OCA, BPR, MP7, AUG, DIM pour les crédits — PAT et BPR scindés en Papier/eDirect), plutôt qu'un simple total. Zone teal = assurances (nombre), zone ambre = crédits (montant) ; les puces sans activité s'effacent visuellement (fond neutre, tiret) pour que l'œil aille directement à ce qui bouge. La grille s'adapte à toutes les largeurs d'écran, sans défilement horizontal.
+Le récapitulatif de chaque jour reprend la présentation du tableau papier utilisé par l'équipe : une grille de puces responsive avec une puce par produit (ALLIN, DIMC, DIM pour les assurances ; PAT, OCA, BPR, MP7, AUG, DIM pour les crédits — PAT et BPR scindés en Papier/eDirect), plutôt qu'un simple total. Zone teal = assurances (nombre), zone ambre = crédits (montant) ; les puces sans activité s'effacent visuellement (fond neutre, tiret) pour que l'œil aille directement à ce qui bouge. Pour les crédits, le nombre de dossiers en instance pour ce type est indiqué entre parenthèses juste devant le nom du produit (ex. « (1) PAT »). La grille s'adapte à toutes les largeurs d'écran, sans défilement horizontal.
 
 Ce même récapitulatif du jour (composant `RecapGrid`, section Assurances optionnelle via une prop `showAssurance`) apparaît aussi :
 - dans **Ma saisie**, sous "Mes ventes du jour" — Assurances et crédits (ces derniers renommés **« Vente en instance »**) ;
