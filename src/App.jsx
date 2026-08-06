@@ -190,6 +190,68 @@ function creditCountParTypeFor(creditRecords, memberId, monthKey) {
   );
 }
 
+// Calcule tous les chiffres du mois pour un collaborateur (réalisé et
+// objectifs, tous produits confondus) — factorisé pour être utilisé à la
+// fois par la vue d'ensemble compacte (statut de rythme) et par la carte
+// détaillée d'un collaborateur, sans dupliquer la logique.
+function computeMemberMetrics(member, entries, monthFigures, creditRecords, viewMonth) {
+  const f = monthFigures[member.id] || emptyFigures();
+  const objA = member.objectifAssurance ?? 5;
+  const objC = member.objectifCredit ?? 5;
+  const objM = member.objectifMontant ?? 5000;
+  const declared = entries.filter((e) => e.personId === member.id && e.date.slice(0, 7) === viewMonth);
+  const todayForMember = entries.filter((e) => e.personId === member.id && e.date === todayISO());
+  const montantRealise = declared.reduce((s, e) => s + (e.montant || 0), 0);
+  const resteM = Math.max(0, objM - montantRealise);
+  const assuranceRealiseParType = Object.fromEntries(
+    ASSURANCE_TYPES.map((at) => [
+      at,
+      declared.filter((e) => e.type === "assurance" && e.assuranceType === at).reduce((s, e) => s + (e.quantite || 1), 0),
+    ])
+  );
+  const creditRealiseParType = creditRealiseParTypeFor(f, creditRecords, member.id, viewMonth);
+  const creditCountParType = creditCountParTypeFor(creditRecords, member.id, viewMonth);
+  const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditRealiseParType[ct] || 0), 0);
+  const creditCountTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditCountParType[ct] || 0), 0);
+  const resteC = Math.max(0, objC - creditTotal);
+  const assuranceRealise = ASSURANCE_TYPES.reduce((s, at) => s + (assuranceRealiseParType[at] || 0), 0);
+  const resteA = Math.max(0, objA - assuranceRealise);
+  const objectifsAssuranceParType = member.objectifsAssuranceParType || {};
+  const objectifsCreditParType = member.objectifsCreditParType || {};
+  const hasProduitObjectifs =
+    ASSURANCE_TYPES.some((at) => objectifsAssuranceParType[at] > 0) ||
+    CREDIT_TYPES.some((ct) => objectifsCreditParType[ct] > 0);
+  return {
+    objA, objC, objM, declared, todayForMember, montantRealise, resteM,
+    assuranceRealiseParType, creditRealiseParType, creditCountParType,
+    creditTotal, creditCountTotal, resteC, assuranceRealise, resteA,
+    objectifsAssuranceParType, objectifsCreditParType, hasProduitObjectifs,
+  };
+}
+
+// Statut "au rythme" pour le mois en cours : compare la progression réelle
+// de chaque objectif fixé (> 0) à la progression qu'on attendrait à ce
+// stade du mois si l'activité était linéaire (jours écoulés / jours du
+// mois). "En retard" dès qu'au moins un objectif fixé est sous ce rythme ;
+// "Aucun objectif" si rien n'est fixé ; "À jour" sinon. Uniquement calculé
+// pour le mois en cours — un mois archivé est déjà clos, la notion de
+// "retard" n'a plus de sens.
+function memberPaceStatus(metrics, isCurrentMonth) {
+  if (!isCurrentMonth) return { key: "archive", label: "Mois archivé" };
+  const { objA, objC, objM, assuranceRealise, creditTotal, montantRealise } = metrics;
+  const objectifs = [
+    { obj: objA, real: assuranceRealise },
+    { obj: objC, real: creditTotal },
+    { obj: objM, real: montantRealise },
+  ].filter((o) => o.obj > 0);
+  if (objectifs.length === 0) return { key: "neutre", label: "Aucun objectif" };
+  const now = new Date();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const elapsedFraction = Math.min(1, now.getDate() / daysInMonth);
+  const late = objectifs.some((o) => o.real < o.obj * elapsedFraction);
+  return late ? { key: "retard", label: "En retard" } : { key: "a_jour", label: "À jour" };
+}
+
 // Répartition d'un lot de ventes déclarées (entries) par produit — nombre
 // pour les assurances, montant pour les crédits, PAT/BPR scindés en
 // Papier/eDirect. Utilisé par RecapGrid (Journal, Ma saisie, Suivi &
@@ -1896,6 +1958,12 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
   const [generalObj, setGeneralObj] = useState({ objectifAssurance: 5, objectifCredit: 5, objectifMontant: 5000 });
   const [creditDate, setCreditDate] = useState(todayISO());
   const [creditDraft, setCreditDraft] = useState(emptyCreditDraft());
+  // Sélection du collaborateur affiché en détail (vue responsable) — un
+  // menu déroulant + une liste compacte avec statut de rythme remplacent
+  // l'affichage de toutes les cartes en même temps, pour rester utilisable
+  // avec une grande équipe (50 collaborateurs et plus).
+  const [selectedMemberId, setSelectedMemberId] = useState(null);
+  const [memberSearch, setMemberSearch] = useState("");
 
   const applyGeneralObjectives = async () => {
     const updated = members.map((m) =>
@@ -2022,6 +2090,53 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
   };
 
   const visibleMembers = isManager ? collaborators : collaborators.filter((m) => m.id === session.id);
+
+  // Résumés légers (statut de rythme) pour tous les collaborateurs — sert à
+  // la fois la liste compacte "vue d'ensemble" et le menu déroulant, sans
+  // jamais avoir à rendre les cartes détaillées de tout le monde à la fois.
+  const summaries = useMemo(
+    () =>
+      collaborators.map((m) => {
+        const metrics = computeMemberMetrics(m, entries, monthFigures, creditRecords, viewMonth);
+        return { member: m, metrics, status: memberPaceStatus(metrics, isCurrentMonth) };
+      }),
+    [collaborators, entries, monthFigures, creditRecords, viewMonth, isCurrentMonth]
+  );
+  const statusCounts = useMemo(
+    () =>
+      summaries.reduce(
+        (acc, s) => ({ ...acc, [s.status.key]: (acc[s.status.key] || 0) + 1 }),
+        { retard: 0, a_jour: 0, neutre: 0 }
+      ),
+    [summaries]
+  );
+  const filteredSummaries = useMemo(() => {
+    const q = memberSearch.trim().toLowerCase();
+    const list = q
+      ? summaries.filter((s) => s.member.name.toLowerCase().includes(q) || s.member.email.toLowerCase().includes(q))
+      : summaries;
+    const order = { retard: 0, a_jour: 1, archive: 1, neutre: 2 };
+    return [...list].sort(
+      (a, b) => (order[a.status.key] ?? 3) - (order[b.status.key] ?? 3) || a.member.name.localeCompare(b.member.name)
+    );
+  }, [summaries, memberSearch]);
+
+  // Sélectionne par défaut le premier collaborateur en retard (le plus
+  // pertinent à traiter), sinon le premier de la liste — et re-sélectionne
+  // automatiquement si le collaborateur choisi disparaît (retiré de
+  // l'équipe).
+  useEffect(() => {
+    if (!isManager) return;
+    if (collaborators.length === 0) {
+      if (selectedMemberId !== null) setSelectedMemberId(null);
+      return;
+    }
+    if (collaborators.some((m) => m.id === selectedMemberId)) return;
+    const firstLate = summaries.find((s) => s.status.key === "retard");
+    setSelectedMemberId((firstLate || summaries[0])?.member.id ?? null);
+  }, [isManager, collaborators, summaries, selectedMemberId]);
+
+  const selectedMember = collaborators.find((m) => m.id === selectedMemberId) || null;
 
   const exportExcel = () => {
     const rows = collaborators.map((m) => {
@@ -2163,220 +2278,327 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
         </div>
       )}
 
-      {visibleMembers.length === 0 && (
+      {isManager && collaborators.length > 0 && (
+        <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
+            <h2 className="text-sm font-semibold">
+              Vue d'ensemble — {collaborators.length} collaborateur{collaborators.length > 1 ? "s" : ""}
+            </h2>
+            {isCurrentMonth && (
+              <div className="flex items-center gap-2 text-xs flex-wrap">
+                {statusCounts.retard > 0 && (
+                  <span className="font-semibold px-2 py-1 rounded-full" style={{ background: THEME.redSoft, color: THEME.red }}>
+                    {statusCounts.retard} en retard
+                  </span>
+                )}
+                {statusCounts.a_jour > 0 && (
+                  <span className="font-medium px-2 py-1 rounded-full" style={{ background: THEME.tealSoft, color: THEME.teal }}>
+                    {statusCounts.a_jour} à jour
+                  </span>
+                )}
+                {statusCounts.neutre > 0 && (
+                  <span className="font-medium px-2 py-1 rounded-full" style={{ background: THEME.line, color: THEME.navySoft }}>
+                    {statusCounts.neutre} sans objectif
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          <p className="text-xs mb-3" style={{ color: THEME.navySoft }}>
+            Choisissez un collaborateur pour afficher son détail (objectifs, graphique, saisie des crédits) — la liste reste lisible même avec une grande équipe.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2 mb-3">
+            <input
+              value={memberSearch}
+              onChange={(e) => setMemberSearch(e.target.value)}
+              placeholder="Rechercher un nom ou un e-mail…"
+              className="flex-1 px-3 py-2 rounded-lg text-sm"
+              style={{ border: `1px solid ${THEME.line}` }}
+            />
+            <select
+              value={selectedMemberId || ""}
+              onChange={(e) => setSelectedMemberId(e.target.value)}
+              className="px-3 py-2 rounded-lg text-sm sm:w-64 flex-shrink-0"
+              style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
+            >
+              <option value="" disabled>Choisir un collaborateur</option>
+              {summaries.map((s) => (
+                <option key={s.member.id} value={s.member.id}>
+                  {s.member.name}
+                  {isCurrentMonth && s.status.key !== "neutre" ? ` — ${s.status.label}` : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+          {filteredSummaries.length === 0 ? (
+            <p className="text-sm text-center py-4" style={{ color: THEME.navySoft }}>
+              Aucun collaborateur ne correspond à la recherche.
+            </p>
+          ) : (
+            <div className="space-y-1.5 max-h-96 overflow-y-auto pr-0.5">
+              {filteredSummaries.map((s) => {
+                const active = s.member.id === selectedMemberId;
+                return (
+                  <button
+                    key={s.member.id}
+                    type="button"
+                    onClick={() => setSelectedMemberId(s.member.id)}
+                    className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg text-sm text-left transition-colors"
+                    style={{
+                      background: active ? MANAGER_ACCENT_SOFT : THEME.bg,
+                      border: active ? `1px solid ${MANAGER_ACCENT}` : "1px solid transparent",
+                    }}
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{s.member.name}</div>
+                      <div className="text-xs truncate" style={{ color: THEME.navySoft }}>{s.member.email}</div>
+                    </div>
+                    <StatusBadge status={s.status} />
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {isManager ? (
+        collaborators.length === 0 ? (
+          <p className="text-sm text-center py-10" style={{ color: THEME.navySoft }}>
+            Aucun collaborateur pour l'instant.
+          </p>
+        ) : (
+          selectedMember && (
+            <MemberDetailCard
+              key={selectedMember.id}
+              member={selectedMember}
+              session={session}
+              isManager={isManager}
+              viewMonth={viewMonth}
+              isCurrentMonth={isCurrentMonth}
+              entries={entries}
+              monthFigures={monthFigures}
+              creditRecords={creditRecords}
+              editingId={editing}
+              setEditing={setEditing}
+              objDraft={objDraft}
+              setObjDraft={setObjDraft}
+              objByTypeDraft={objByTypeDraft}
+              setObjByTypeDraft={setObjByTypeDraft}
+              creditDate={creditDate}
+              creditDraft={creditDraft}
+              setCreditDraft={setCreditDraft}
+              startEdit={startEdit}
+              changeCreditDate={changeCreditDate}
+              saveEdit={saveEdit}
+              saveCreditRecords={saveCreditRecords}
+            />
+          )
+        )
+      ) : visibleMembers.length === 0 ? (
         <p className="text-sm text-center py-10" style={{ color: THEME.navySoft }}>
           Aucun collaborateur pour l'instant.
         </p>
+      ) : (
+        visibleMembers.map((member) => (
+          <MemberDetailCard
+            key={member.id}
+            member={member}
+            session={session}
+            isManager={isManager}
+            viewMonth={viewMonth}
+            isCurrentMonth={isCurrentMonth}
+            entries={entries}
+            monthFigures={monthFigures}
+            creditRecords={creditRecords}
+            editingId={editing}
+            setEditing={setEditing}
+            objDraft={objDraft}
+            setObjDraft={setObjDraft}
+            objByTypeDraft={objByTypeDraft}
+            setObjByTypeDraft={setObjByTypeDraft}
+            creditDate={creditDate}
+            creditDraft={creditDraft}
+            setCreditDraft={setCreditDraft}
+            startEdit={startEdit}
+            changeCreditDate={changeCreditDate}
+            saveEdit={saveEdit}
+            saveCreditRecords={saveCreditRecords}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+// Puce de statut de rythme (vue d'ensemble responsable) — couleur sémantique
+// cohérente avec le reste de l'app (rouge = retard, teal = à jour).
+function StatusBadge({ status }) {
+  const styles = {
+    retard: { bg: THEME.redSoft, color: THEME.red },
+    a_jour: { bg: THEME.tealSoft, color: THEME.teal },
+    neutre: { bg: THEME.line, color: THEME.navySoft },
+    archive: { bg: THEME.line, color: THEME.navySoft },
+  };
+  const s = styles[status.key] || styles.neutre;
+  return (
+    <span
+      className="text-[11px] font-semibold px-2 py-1 rounded-full flex-shrink-0 whitespace-nowrap"
+      style={{ background: s.bg, color: s.color }}
+    >
+      {status.label}
+    </span>
+  );
+}
+
+// Carte détaillée d'un collaborateur (objectifs, graphique, saisie des
+// crédits) — un seul rendu à la fois côté responsable (celui sélectionné
+// dans la vue d'ensemble), toujours affiché directement côté collaborateur
+// (qui ne voit que son propre profil).
+function MemberDetailCard({
+  member, session, isManager, viewMonth, isCurrentMonth, entries, monthFigures, creditRecords,
+  editingId, setEditing, objDraft, setObjDraft, objByTypeDraft, setObjByTypeDraft,
+  creditDate, creditDraft, setCreditDraft, startEdit, changeCreditDate, saveEdit, saveCreditRecords,
+}) {
+  const isEditing = editingId === member.id;
+  const {
+    objA, objC, objM, declared, todayForMember, montantRealise, resteM,
+    assuranceRealiseParType, creditRealiseParType, creditCountParType,
+    creditTotal, creditCountTotal, resteC, assuranceRealise, resteA,
+    objectifsAssuranceParType, objectifsCreditParType, hasProduitObjectifs,
+  } = computeMemberMetrics(member, entries, monthFigures, creditRecords, viewMonth);
+
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+      <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${THEME.line}` }}>
+        <div>
+          <div className="font-semibold text-sm">{member.name}</div>
+          <div className="text-xs" style={{ color: THEME.navySoft }}>{member.email}</div>
+        </div>
+        {isManager && !isEditing && (
+          <button
+            onClick={() => startEdit(member)}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-opacity hover:opacity-90 flex-shrink-0"
+            style={{ background: MANAGER_ACCENT, color: "#fff" }}
+          >
+            <Pencil size={13} /> Mettre à jour
+          </button>
+        )}
+      </div>
+
+      <div className="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <ProgressBlock
+          icon={Shield}
+          label="Assurances"
+          value={assuranceRealise}
+          objective={objA}
+          reste={resteA}
+          color={THEME.teal}
+          colorSoft={THEME.tealSoft}
+          editing={isEditing}
+          onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifAssurance: v }))}
+          draftObjective={objDraft.objectifAssurance}
+          readOnlyValue
+          isCurrentMonth={isCurrentMonth}
+        />
+        <ProgressBlock
+          icon={CreditCard}
+          label="Crédits (total)"
+          value={creditTotal}
+          objective={objC}
+          reste={resteC}
+          color={THEME.amber}
+          colorSoft={THEME.amberSoft}
+          editing={isEditing}
+          onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifCredit: v }))}
+          draftObjective={objDraft.objectifCredit}
+          readOnlyValue
+          isCurrentMonth={isCurrentMonth}
+          sublabel={`${creditCountTotal} dossier${creditCountTotal !== 1 ? "s" : ""} financé${creditCountTotal !== 1 ? "s" : ""}`}
+        />
+        <ProgressBlock
+          icon={Euro}
+          label="Montant vendu"
+          value={montantRealise}
+          objective={objM}
+          reste={resteM}
+          color={THEME.navy}
+          colorSoft={THEME.line}
+          editing={isEditing}
+          onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifMontant: v }))}
+          draftObjective={objDraft.objectifMontant}
+          readOnlyValue
+          format={formatEUR}
+          isCurrentMonth={isCurrentMonth}
+        />
+      </div>
+
+      {isCurrentMonth && !isManager && (
+        <div className="px-5 pb-5">
+          <div className="text-xs font-semibold mb-2 flex items-center gap-1.5" style={{ color: THEME.navySoft }}>
+            <Calendar size={13} /> Récapitulatif du jour
+          </div>
+          <RecapGrid entries={todayForMember} />
+        </div>
       )}
 
-      {visibleMembers.map((member) => {
-        const f = monthFigures[member.id] || emptyFigures();
-        const objA = member.objectifAssurance ?? 5;
-        const objC = member.objectifCredit ?? 5;
-        const objM = member.objectifMontant ?? 5000;
-        const declared = entries.filter((e) => e.personId === member.id && e.date.slice(0, 7) === viewMonth);
-        const todayForMember = entries.filter((e) => e.personId === member.id && e.date === todayISO());
-        // Le montant vendu et le nombre d'assurances vendues viennent
-        // directement du journal déclaré (pas d'un chiffre saisi à la
-        // main) : ils reflètent en temps réel ce que le collaborateur a
-        // déclaré dans "Ma saisie", quel que soit le type d'assurance.
-        const montantRealise = declared.reduce((s, e) => s + (e.montant || 0), 0);
-        const resteM = Math.max(0, objM - montantRealise);
-        const isEditing = editing === member.id;
+      <div className="px-5 pb-5">
+        <PerformanceChart
+          entries={entries}
+          lines={
+            isManager
+              ? [
+                  { key: "self", personId: member.id, label: member.name, color: THEME.yellow },
+                  { key: "team", personId: null, label: "Équipe DirectSales", color: THEME.navy },
+                ]
+              : [{ key: "self", personId: member.id, label: member.name, color: THEME.yellow }]
+          }
+        />
+      </div>
 
-        // Assurances : calculées depuis le journal déclaré par le
-        // collaborateur (jamais saisi à la main).
-        const assuranceRealiseParType = Object.fromEntries(
-          ASSURANCE_TYPES.map((at) => [
-            at,
-            declared.filter((e) => e.type === "assurance" && e.assuranceType === at).reduce((s, e) => s + (e.quantite || 1), 0),
-          ])
-        );
-        // Crédits : validés par le responsable, saisis au jour le jour
-        // (nombre + montant par type) via "Mettre à jour" — voir
-        // creditRealiseParTypeFor / creditCountParTypeFor.
-        const creditRealiseParType = creditRealiseParTypeFor(f, creditRecords, member.id, viewMonth);
-        const creditCountParType = creditCountParTypeFor(creditRecords, member.id, viewMonth);
-        const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditRealiseParType[ct] || 0), 0);
-        const creditCountTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditCountParType[ct] || 0), 0);
-        const resteC = Math.max(0, objC - creditTotal);
-        const assuranceRealise = ASSURANCE_TYPES.reduce((s, at) => s + (assuranceRealiseParType[at] || 0), 0);
-        const resteA = Math.max(0, objA - assuranceRealise);
-        const objectifsAssuranceParType = member.objectifsAssuranceParType || {};
-        const objectifsCreditParType = member.objectifsCreditParType || {};
-        const hasProduitObjectifs =
-          ASSURANCE_TYPES.some((at) => objectifsAssuranceParType[at] > 0) ||
-          CREDIT_TYPES.some((ct) => objectifsCreditParType[ct] > 0);
-
-        return (
-          <div key={member.id} className="rounded-2xl overflow-hidden" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
-            <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${THEME.line}` }}>
-              <div>
-                <div className="font-semibold text-sm">{member.name}</div>
-                <div className="text-xs" style={{ color: THEME.navySoft }}>{member.email}</div>
-              </div>
-              {isManager && !isEditing && (
-                <button
-                  onClick={() => startEdit(member)}
-                  className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-opacity hover:opacity-90 flex-shrink-0"
-                  style={{ background: MANAGER_ACCENT, color: "#fff" }}
-                >
-                  <Pencil size={13} /> Mettre à jour
-                </button>
-              )}
+      {isEditing && (
+        <div className="px-5 pb-5">
+          <div
+            className="rounded-xl p-3.5 mb-5"
+            style={{ background: THEME.amberSoft, border: `1px solid ${THEME.amber}30` }}
+          >
+            <div className="text-xs font-semibold mb-2 flex items-center gap-1.5" style={{ color: THEME.navy }}>
+              <CreditCard size={13} style={{ color: THEME.amber }} /> Crédits financés — saisie du jour
             </div>
-
-            <div className="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <ProgressBlock
-                icon={Shield}
-                label="Assurances"
-                value={assuranceRealise}
-                objective={objA}
-                reste={resteA}
-                color={THEME.teal}
-                colorSoft={THEME.tealSoft}
-                editing={isEditing}
-                onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifAssurance: v }))}
-                draftObjective={objDraft.objectifAssurance}
-                readOnlyValue
-                isCurrentMonth={isCurrentMonth}
+            <p className="text-xs mb-3" style={{ color: THEME.navySoft }}>
+              À remplir chaque jour : pour chaque type financé, le nombre de dossiers et le montant total. Choisir une autre date recharge (et permet de corriger) la saisie de ce jour-là.
+            </p>
+            <label className="block mb-3">
+              <span className="block text-xs font-medium mb-1" style={{ color: THEME.navySoft }}>Date</span>
+              <input
+                type="date"
+                value={creditDate}
+                onChange={(e) => changeCreditDate(member, e.target.value)}
+                className="w-full px-3 py-2 rounded-lg text-sm"
+                style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
               />
-              <ProgressBlock
-                icon={CreditCard}
-                label="Crédits (total)"
-                value={creditTotal}
-                objective={objC}
-                reste={resteC}
-                color={THEME.amber}
-                colorSoft={THEME.amberSoft}
-                editing={isEditing}
-                onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifCredit: v }))}
-                draftObjective={objDraft.objectifCredit}
-                readOnlyValue
-                isCurrentMonth={isCurrentMonth}
-                sublabel={`${creditCountTotal} dossier${creditCountTotal !== 1 ? "s" : ""} financé${creditCountTotal !== 1 ? "s" : ""}`}
-              />
-              <ProgressBlock
-                icon={Euro}
-                label="Montant vendu"
-                value={montantRealise}
-                objective={objM}
-                reste={resteM}
-                color={THEME.navy}
-                colorSoft={THEME.line}
-                editing={isEditing}
-                onChangeObjective={(v) => setObjDraft((o) => ({ ...o, objectifMontant: v }))}
-                draftObjective={objDraft.objectifMontant}
-                readOnlyValue
-                format={formatEUR}
-                isCurrentMonth={isCurrentMonth}
-              />
-            </div>
-
-            {isCurrentMonth && !isManager && (
-              <div className="px-5 pb-5">
-                <div className="text-xs font-semibold mb-2 flex items-center gap-1.5" style={{ color: THEME.navySoft }}>
-                  <Calendar size={13} /> Récapitulatif du jour
-                </div>
-                <RecapGrid entries={todayForMember} />
-              </div>
-            )}
-
-            <div className="px-5 pb-5">
-              <PerformanceChart
-                entries={entries}
-                lines={
-                  isManager
-                    ? [
-                        { key: "self", personId: member.id, label: member.name, color: THEME.yellow },
-                        { key: "team", personId: null, label: "Équipe DirectSales", color: THEME.navy },
-                      ]
-                    : [{ key: "self", personId: member.id, label: member.name, color: THEME.yellow }]
-                }
-              />
-            </div>
-
-            {isEditing && (
-              <div className="px-5 pb-5">
-                <div
-                  className="rounded-xl p-3.5 mb-5"
-                  style={{ background: THEME.amberSoft, border: `1px solid ${THEME.amber}30` }}
-                >
-                  <div className="text-xs font-semibold mb-2 flex items-center gap-1.5" style={{ color: THEME.navy }}>
-                    <CreditCard size={13} style={{ color: THEME.amber }} /> Crédits financés — saisie du jour
-                  </div>
-                  <p className="text-xs mb-3" style={{ color: THEME.navySoft }}>
-                    À remplir chaque jour : pour chaque type financé, le nombre de dossiers et le montant total. Choisir une autre date recharge (et permet de corriger) la saisie de ce jour-là.
-                  </p>
-                  <label className="block mb-3">
-                    <span className="block text-xs font-medium mb-1" style={{ color: THEME.navySoft }}>Date</span>
-                    <input
-                      type="date"
-                      value={creditDate}
-                      onChange={(e) => changeCreditDate(member, e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg text-sm"
-                      style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
-                    />
-                  </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
-                    {CREDIT_TYPES.map((ct) =>
-                      CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? (
-                        <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
-                          <div className="text-xs font-semibold mb-2">{ct}</div>
-                          <div className="space-y-2">
-                            {CONTRACT_MODES.map((mode) => (
-                              <div key={mode}>
-                                <div className="text-[10px] font-medium mb-1" style={{ color: THEME.navySoft }}>{mode}</div>
-                                <div className="grid grid-cols-2 gap-2">
-                                  <label className="block">
-                                    <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Nombre</span>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      value={creditDraft[ct][mode].nombre}
-                                      onChange={(e) =>
-                                        setCreditDraft((d) => ({
-                                          ...d,
-                                          [ct]: { ...d[ct], [mode]: { ...d[ct][mode], nombre: Number(e.target.value) || 0 } },
-                                        }))
-                                      }
-                                      className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
-                                      style={{ border: `1px solid ${THEME.line}` }}
-                                    />
-                                  </label>
-                                  <label className="block">
-                                    <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Montant (€)</span>
-                                    <input
-                                      type="number"
-                                      min="0"
-                                      value={creditDraft[ct][mode].montant}
-                                      onChange={(e) =>
-                                        setCreditDraft((d) => ({
-                                          ...d,
-                                          [ct]: { ...d[ct], [mode]: { ...d[ct][mode], montant: Number(e.target.value) || 0 } },
-                                        }))
-                                      }
-                                      className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
-                                      style={{ border: `1px solid ${THEME.line}` }}
-                                    />
-                                  </label>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : (
-                        <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
-                          <div className="text-xs font-semibold mb-1.5">{ct}</div>
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+              {CREDIT_TYPES.map((ct) =>
+                CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? (
+                  <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
+                    <div className="text-xs font-semibold mb-2">{ct}</div>
+                    <div className="space-y-2">
+                      {CONTRACT_MODES.map((mode) => (
+                        <div key={mode}>
+                          <div className="text-[10px] font-medium mb-1" style={{ color: THEME.navySoft }}>{mode}</div>
                           <div className="grid grid-cols-2 gap-2">
                             <label className="block">
                               <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Nombre</span>
                               <input
                                 type="number"
                                 min="0"
-                                value={creditDraft[ct].nombre}
+                                value={creditDraft[ct][mode].nombre}
                                 onChange={(e) =>
-                                  setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], nombre: Number(e.target.value) || 0 } }))
+                                  setCreditDraft((d) => ({
+                                    ...d,
+                                    [ct]: { ...d[ct], [mode]: { ...d[ct][mode], nombre: Number(e.target.value) || 0 } },
+                                  }))
                                 }
                                 className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
                                 style={{ border: `1px solid ${THEME.line}` }}
@@ -2387,9 +2609,12 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
                               <input
                                 type="number"
                                 min="0"
-                                value={creditDraft[ct].montant}
+                                value={creditDraft[ct][mode].montant}
                                 onChange={(e) =>
-                                  setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], montant: Number(e.target.value) || 0 } }))
+                                  setCreditDraft((d) => ({
+                                    ...d,
+                                    [ct]: { ...d[ct], [mode]: { ...d[ct][mode], montant: Number(e.target.value) || 0 } },
+                                  }))
                                 }
                                 className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
                                 style={{ border: `1px solid ${THEME.line}` }}
@@ -2397,142 +2622,174 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
                             </label>
                           </div>
                         </div>
-                      )
-                    )}
+                      ))}
+                    </div>
                   </div>
-                  <button
-                    onClick={() => saveCreditRecords(member)}
-                    className="w-full py-2 rounded-lg text-sm font-semibold text-white transition-opacity hover:opacity-90"
-                    style={{ background: THEME.amber }}
-                  >
-                    Enregistrer les crédits du {new Date(creditDate + "T00:00:00").toLocaleDateString("fr-FR")}
-                  </button>
-                </div>
-
-                <div className="text-xs font-medium mb-2" style={{ color: THEME.navySoft }}>
-                  Objectifs par produit (optionnel)
-                </div>
-                <div className="grid grid-cols-3 gap-2 mb-2">
-                  {ASSURANCE_TYPES.map((at) => (
-                    <label key={at} className="block">
-                      <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{at} (nb)</span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={objByTypeDraft.assurance[at] || 0}
-                        onChange={(e) =>
-                          setObjByTypeDraft((o) => ({ ...o, assurance: { ...o.assurance, [at]: Number(e.target.value) || 0 } }))
-                        }
-                        className="w-full px-2 py-2 rounded-lg text-sm text-center"
-                        style={{ border: `1px solid ${THEME.line}` }}
-                      />
-                    </label>
-                  ))}
-                </div>
-                <div className="grid grid-cols-3 gap-2 mb-4">
-                  {CREDIT_TYPES.map((ct) => (
-                    <label key={ct} className="block">
-                      <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{ct} (€)</span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={objByTypeDraft.credit[ct] || 0}
-                        onChange={(e) =>
-                          setObjByTypeDraft((o) => ({ ...o, credit: { ...o.credit, [ct]: Number(e.target.value) || 0 } }))
-                        }
-                        className="w-full px-2 py-2 rounded-lg text-sm text-center"
-                        style={{ border: `1px solid ${THEME.line}` }}
-                      />
-                    </label>
-                  ))}
-                </div>
-
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => saveEdit(member)}
-                    className="flex-1 py-2 rounded-lg text-sm font-semibold text-white"
-                    style={{ background: MANAGER_ACCENT }}
-                  >
-                    Enregistrer les objectifs
-                  </button>
-                  <button
-                    onClick={() => setEditing(null)}
-                    className="px-4 py-2 rounded-lg text-sm font-medium"
-                    style={{ background: THEME.bg, color: THEME.navySoft }}
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {hasProduitObjectifs && (
-              <div className="px-5 pb-5">
-                <details>
-                  <summary className="text-xs cursor-pointer font-medium" style={{ color: isManager ? MANAGER_ACCENT : THEME.teal }}>
-                    Détail des objectifs par produit
-                  </summary>
-                  <div className="mt-2 grid grid-cols-3 gap-2">
-                    {ASSURANCE_TYPES.map((at) => {
-                      const obj = objectifsAssuranceParType[at] || 0;
-                      if (!obj) return null;
-                      const real = assuranceRealiseParType[at] || 0;
-                      const atteint = real >= obj;
-                      return (
-                        <div key={`a-${at}`} className="text-xs px-2 py-2 rounded-lg" style={{ background: THEME.bg }}>
-                          <div className="font-semibold flex items-center gap-1">
-                            {at} {atteint && <CheckCircle2 size={11} style={{ color: THEME.teal }} />}
-                          </div>
-                          <div style={{ color: THEME.navySoft }}>{real} / {obj}</div>
-                        </div>
-                      );
-                    })}
-                    {CREDIT_TYPES.map((ct) => {
-                      const obj = objectifsCreditParType[ct] || 0;
-                      if (!obj) return null;
-                      const real = creditRealiseParType[ct] || 0;
-                      const count = creditCountParType[ct] || 0;
-                      const atteint = real >= obj;
-                      return (
-                        <div key={`c-${ct}`} className="text-xs px-2 py-2 rounded-lg" style={{ background: THEME.bg }}>
-                          <div className="font-semibold flex items-center gap-1">
-                            {ct} {atteint && <CheckCircle2 size={11} style={{ color: THEME.amber }} />}
-                          </div>
-                          <div style={{ color: THEME.navySoft }}>{formatEUR(real)} / {formatEUR(obj)}</div>
-                          <div style={{ color: THEME.navySoft }}>{count} dossier{count !== 1 ? "s" : ""}</div>
-                        </div>
-                      );
-                    })}
+                ) : (
+                  <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
+                    <div className="text-xs font-semibold mb-1.5">{ct}</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <label className="block">
+                        <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Nombre</span>
+                        <input
+                          type="number"
+                          min="0"
+                          value={creditDraft[ct].nombre}
+                          onChange={(e) =>
+                            setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], nombre: Number(e.target.value) || 0 } }))
+                          }
+                          className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
+                          style={{ border: `1px solid ${THEME.line}` }}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Montant (€)</span>
+                        <input
+                          type="number"
+                          min="0"
+                          value={creditDraft[ct].montant}
+                          onChange={(e) =>
+                            setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], montant: Number(e.target.value) || 0 } }))
+                          }
+                          className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
+                          style={{ border: `1px solid ${THEME.line}` }}
+                        />
+                      </label>
+                    </div>
                   </div>
-                </details>
-              </div>
-            )}
-
-            {declared.length > 0 && (
-              <div className="px-5 pb-5">
-                <details>
-                  <summary className="text-xs cursor-pointer font-medium" style={{ color: THEME.teal }}>
-                    {declared.length} dossier(s) déclaré(s) ce mois — journal
-                  </summary>
-                  <div className="mt-2 space-y-1.5">
-                    {declared.map((e) => (
-                      <div key={e.id} className="text-xs flex justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: THEME.bg }}>
-                        <span>{e.type === "assurance" ? `Assurance ${e.assuranceType}` : creditLabel(e)} — {e.dossier}</span>
-                        <span className="flex items-center gap-2 flex-shrink-0">
-                          <span className="font-medium" style={{ color: THEME.navy }}>
-                            {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
-                          </span>
-                          <span style={{ color: THEME.navySoft }}>{new Date(e.date).toLocaleDateString("fr-FR")}</span>
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              </div>
-            )}
+                )
+              )}
+            </div>
+            <button
+              onClick={() => saveCreditRecords(member)}
+              className="w-full py-2 rounded-lg text-sm font-semibold text-white transition-opacity hover:opacity-90"
+              style={{ background: THEME.amber }}
+            >
+              Enregistrer les crédits du {new Date(creditDate + "T00:00:00").toLocaleDateString("fr-FR")}
+            </button>
           </div>
-        );
-      })}
+
+          <div className="text-xs font-medium mb-2" style={{ color: THEME.navySoft }}>
+            Objectifs par produit (optionnel)
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            {ASSURANCE_TYPES.map((at) => (
+              <label key={at} className="block">
+                <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{at} (nb)</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={objByTypeDraft.assurance[at] || 0}
+                  onChange={(e) =>
+                    setObjByTypeDraft((o) => ({ ...o, assurance: { ...o.assurance, [at]: Number(e.target.value) || 0 } }))
+                  }
+                  className="w-full px-2 py-2 rounded-lg text-sm text-center"
+                  style={{ border: `1px solid ${THEME.line}` }}
+                />
+              </label>
+            ))}
+          </div>
+          <div className="grid grid-cols-3 gap-2 mb-4">
+            {CREDIT_TYPES.map((ct) => (
+              <label key={ct} className="block">
+                <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{ct} (€)</span>
+                <input
+                  type="number"
+                  min="0"
+                  value={objByTypeDraft.credit[ct] || 0}
+                  onChange={(e) =>
+                    setObjByTypeDraft((o) => ({ ...o, credit: { ...o.credit, [ct]: Number(e.target.value) || 0 } }))
+                  }
+                  className="w-full px-2 py-2 rounded-lg text-sm text-center"
+                  style={{ border: `1px solid ${THEME.line}` }}
+                />
+              </label>
+            ))}
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => saveEdit(member)}
+              className="flex-1 py-2 rounded-lg text-sm font-semibold text-white"
+              style={{ background: MANAGER_ACCENT }}
+            >
+              Enregistrer les objectifs
+            </button>
+            <button
+              onClick={() => setEditing(null)}
+              className="px-4 py-2 rounded-lg text-sm font-medium"
+              style={{ background: THEME.bg, color: THEME.navySoft }}
+            >
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {hasProduitObjectifs && (
+        <div className="px-5 pb-5">
+          <details>
+            <summary className="text-xs cursor-pointer font-medium" style={{ color: isManager ? MANAGER_ACCENT : THEME.teal }}>
+              Détail des objectifs par produit
+            </summary>
+            <div className="mt-2 grid grid-cols-3 gap-2">
+              {ASSURANCE_TYPES.map((at) => {
+                const obj = objectifsAssuranceParType[at] || 0;
+                if (!obj) return null;
+                const real = assuranceRealiseParType[at] || 0;
+                const atteint = real >= obj;
+                return (
+                  <div key={`a-${at}`} className="text-xs px-2 py-2 rounded-lg" style={{ background: THEME.bg }}>
+                    <div className="font-semibold flex items-center gap-1">
+                      {at} {atteint && <CheckCircle2 size={11} style={{ color: THEME.teal }} />}
+                    </div>
+                    <div style={{ color: THEME.navySoft }}>{real} / {obj}</div>
+                  </div>
+                );
+              })}
+              {CREDIT_TYPES.map((ct) => {
+                const obj = objectifsCreditParType[ct] || 0;
+                if (!obj) return null;
+                const real = creditRealiseParType[ct] || 0;
+                const count = creditCountParType[ct] || 0;
+                const atteint = real >= obj;
+                return (
+                  <div key={`c-${ct}`} className="text-xs px-2 py-2 rounded-lg" style={{ background: THEME.bg }}>
+                    <div className="font-semibold flex items-center gap-1">
+                      {ct} {atteint && <CheckCircle2 size={11} style={{ color: THEME.amber }} />}
+                    </div>
+                    <div style={{ color: THEME.navySoft }}>{formatEUR(real)} / {formatEUR(obj)}</div>
+                    <div style={{ color: THEME.navySoft }}>{count} dossier{count !== 1 ? "s" : ""}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        </div>
+      )}
+
+      {declared.length > 0 && (
+        <div className="px-5 pb-5">
+          <details>
+            <summary className="text-xs cursor-pointer font-medium" style={{ color: THEME.teal }}>
+              {declared.length} dossier(s) déclaré(s) ce mois — journal
+            </summary>
+            <div className="mt-2 space-y-1.5">
+              {declared.map((e) => (
+                <div key={e.id} className="text-xs flex justify-between gap-2 px-3 py-2 rounded-lg" style={{ background: THEME.bg }}>
+                  <span>{e.type === "assurance" ? `Assurance ${e.assuranceType}` : creditLabel(e)} — {e.dossier}</span>
+                  <span className="flex items-center gap-2 flex-shrink-0">
+                    <span className="font-medium" style={{ color: THEME.navy }}>
+                      {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
+                    </span>
+                    <span style={{ color: THEME.navySoft }}>{new Date(e.date).toLocaleDateString("fr-FR")}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </details>
+        </div>
+      )}
     </div>
   );
 }

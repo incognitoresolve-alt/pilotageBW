@@ -91,6 +91,18 @@ Quatre bascules — **Jour** (14 derniers jours), **Semaine** (8 dernières sema
 
 La carte de chaque collaborateur dans Suivi & objectifs se limite, côté responsable, aux chiffres-clés (Assurances/Crédits/Montant) et à ce graphique — le récapitulatif du jour (voir plus bas) n'y apparaît plus, pour rester concentré sur la performance. Un collaborateur continue de voir son propre récapitulatif du jour sur sa carte.
 
+## Sélection d'un collaborateur (vue d'ensemble)
+
+Côté **responsable**, l'onglet Suivi & objectifs n'affiche plus toutes les cartes détaillées de l'équipe en même temps — ça devient vite ingérable au-delà de quelques collaborateurs. Une carte "Vue d'ensemble" liste tout le monde de façon compacte (nom, e-mail, un badge de statut) avec un champ de recherche et un menu déroulant "Choisir un collaborateur" ; un clic sur une ligne (ou une sélection dans le menu) affiche juste en dessous la carte détaillée (objectifs, graphique, saisie des crédits) de la personne choisie — une seule à la fois.
+
+Le badge de statut compare, pour le mois en cours, la progression réelle de chaque objectif fixé (> 0) au rythme qu'on attendrait à ce stade du mois (jours écoulés ÷ jours du mois) :
+- **En retard** (rouge) — au moins un objectif fixé est en dessous de ce rythme ;
+- **À jour** (teal) — tous les objectifs fixés suivent (ou dépassent) le rythme attendu ;
+- **Aucun objectif** (gris) — aucun objectif n'est fixé pour ce collaborateur (rien à évaluer) ;
+- pour un mois archivé (déjà clos), le badge n'affiche pas de statut de rythme.
+
+Un compteur en tête de carte ("X en retard · Y à jour · Z sans objectif") donne l'état de toute l'équipe en un coup d'œil, sans avoir à ouvrir chaque profil. Par défaut, le premier collaborateur en retard est présélectionné (à défaut, le premier de la liste) — le plus souvent la personne qu'un responsable veut regarder en premier.
+
 ## Classement
 
 L'onglet **Classement** (visible par tous, responsable comme collaborateurs) liste les collaborateurs du mois en cours, triés par **crédits financés** (le chiffre officiel validé par le responsable) — il se met donc à jour dès qu'un responsable enregistre une saisie de crédits du jour. Les 3 premiers ont un badge de rang coloré (or/argent/bronze) ; seuls le nombre d'**assurances** et le **montant des crédits financés** sont affichés à côté du classement.
