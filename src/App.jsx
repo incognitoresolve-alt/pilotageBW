@@ -1343,7 +1343,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
             </button>
           </div>
           <div className="mb-4">
-            <RecapGrid entries={todayEntries} showAssurance={false} creditTitle="Vente en instance" />
+            <RecapGrid entries={todayEntries} showAssurance creditTitle="Vente en instance" />
           </div>
           {todayEntries.length === 0 ? (
             <p className="text-sm py-6 text-center" style={{ color: THEME.navySoft }}>

@@ -95,8 +95,8 @@ L'onglet **Journal** offre une vue structurée des ventes, jour par jour (au lie
 
 Le récapitulatif de chaque jour reprend la présentation du tableau papier utilisé par l'équipe : une grille de puces responsive avec une puce par produit (ALLIN, DIMC, DIM pour les assurances ; PAT, OCA, BPR, MP7, AUG, DIM pour les crédits — PAT et BPR scindés en Papier/eDirect), plutôt qu'un simple total. Zone teal = assurances (nombre), zone ambre = crédits (montant) ; les puces sans activité s'effacent visuellement (fond neutre, tiret) pour que l'œil aille directement à ce qui bouge. La grille s'adapte à toutes les largeurs d'écran, sans défilement horizontal.
 
-Ce même récapitulatif du jour apparaît aussi :
-- dans **Ma saisie**, sous "Mes ventes du jour" — mais uniquement la partie crédits, renommée **« Vente en instance »** (la section « Assurances » n'y est pas répétée, déjà suivie via le graphique de performance) ;
+Ce même récapitulatif du jour (composant `RecapGrid`, section Assurances optionnelle via une prop `showAssurance`) apparaît aussi :
+- dans **Ma saisie**, sous "Mes ventes du jour" — Assurances et crédits (ces derniers renommés **« Vente en instance »**) ;
 - dans **Suivi & objectifs**, sur la carte d'un collaborateur pour son propre profil (Assurances + Crédits financés) — absent en revanche de la vue responsable, qui reste centrée sur les chiffres-clés et le graphique de performance (voir plus bas).
 
 ## Crédits financés — saisie quotidienne du responsable
