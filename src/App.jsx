@@ -3,10 +3,12 @@ import {
   Shield, CreditCard, Users, LogOut, Plus, Trash2, CheckCircle2,
   Calendar, Settings, ChevronRight, ChevronLeft, Lock, TrendingUp, ClipboardList,
   AlertCircle, Award, X, Download, Euro, History, RotateCcw, Pencil, Link2, Copy,
-  RefreshCw, Loader2, BarChart3, Trophy
+  RefreshCw, Loader2, BarChart3, Trophy, KeyRound, Eye, EyeOff
 } from "lucide-react";
 import * as XLSX from "xlsx";
-import { verifyManagerCode } from "./lib/storage";
+import { verifyManagerCode, loginMember, setMemberPassword, resetMemberPassword } from "./lib/storage";
+
+const PASSWORD_MIN_LEN = 6;
 
 const CREDIT_TYPES = ["PAT", "OCA", "BPR", "MP7", "AUG", "DIM"];
 const ASSURANCE_TYPES = ["ALLIN", "DIMC", "DIM"];
@@ -513,8 +515,9 @@ export default function App() {
   return (
     <div style={{ background: THEME.bg, fontFamily: FONT_BODY, color: THEME.navy }} className="min-h-screen">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=Inter:wght@400;500;600;700&display=swap');
         * { box-sizing: border-box; }
+        body { background: ${THEME.bg}; }
         input, select { font-family: ${FONT_BODY}; }
         input:focus, select:focus, button:focus-visible {
           outline: 2px solid ${THEME.teal};
@@ -525,6 +528,12 @@ export default function App() {
         .sc-fade-in { animation: scFadeIn 0.22s ease-out; }
         @keyframes scToastIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
         .sc-toast { animation: scToastIn 0.18s ease-out; }
+        /* Élévation premium à deux couches, appliquée à toutes les cartes
+           (tout élément rounded-2xl) plutôt qu'un aplat bordure-seule. */
+        .rounded-2xl { box-shadow: ${SHADOW_CARD}; }
+        .sc-btn { transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease; }
+        .sc-btn:hover { transform: translateY(-1px); }
+        .sc-btn:active { transform: translateY(0); }
       `}</style>
 
       {toast && (
@@ -587,48 +596,96 @@ export default function App() {
 }
 
 /* ---------------- THEME ---------------- */
+// Palette "encre & papier" : fond ivoire chaud plutôt que le gris-bleu
+// froid par défaut des templates SaaS, bordures et cartes assorties pour
+// une profondeur discrète (voir SHADOW_2XL) plutôt que des aplats plats.
 const THEME = {
-  bg: "#F3F5F7",
-  navy: "#132038",
-  navySoft: "#4B5A72",
-  teal: "#0E7C72",
-  tealSoft: "#D7EDE9",
-  amber: "#C08A2E",
-  amberSoft: "#F5E7CD",
-  yellow: "#C9A227",
+  bg: "#F6F3EC",
+  navy: "#141C2E",
+  navySoft: "#5B6478",
+  teal: "#0B6B60",
+  tealSoft: "#DCEEE9",
+  amber: "#AD7A22",
+  amberSoft: "#F3E4C6",
+  yellow: "#BE9A26",
   yellowSoft: "#F6EFCE",
-  red: "#B4384A",
+  red: "#A6334A",
   redSoft: "#F5DCE0",
   card: "#FFFFFF",
-  line: "#E3E7EC",
+  line: "#E7E1D3",
 };
 // Accent distinct pour l'interface responsable (nav, boutons d'action
 // manager) — permet de voir d'un coup d'œil dans quel mode on est,
 // sans toucher aux couleurs sémantiques des métriques (teal/ambre).
-const MANAGER_ACCENT = "#7A1F3D";
-const MANAGER_ACCENT_SOFT = "#F3E1E7";
-const FONT_DISPLAY = "'Space Grotesk', sans-serif";
+const MANAGER_ACCENT = "#6E1B34";
+const MANAGER_ACCENT_SOFT = "#F1E0E4";
+// Fraunces (serif éditorial à graisse variable) pour les titres et les
+// grands chiffres — signature visuelle distincte des polices "Space
+// Grotesk / Sora" omniprésentes dans les interfaces générées par IA ;
+// Inter reste en corps de texte pour sa neutralité et sa lisibilité.
+const FONT_DISPLAY = "'Fraunces', serif";
 const FONT_BODY = "'Inter', sans-serif";
+// Élévation à deux couches (ombre proche nette + ombre ambiante diffuse)
+// appliquée globalement à toutes les cartes (voir la règle .sc-elevate
+// injectée dans le <style> global) — donne une profondeur discrète sans
+// alourdir le tracé des bordures.
+const SHADOW_CARD = "0 1px 2px rgba(35,26,12,0.04), 0 10px 28px -8px rgba(35,26,12,0.12)";
 
 /* ---------------- LOGIN ---------------- */
 function LoginScreen({ members, onCreateMember, onLogin, notify }) {
   const [mode, setMode] = useState("collab"); // collab | manager
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  // Rempli quand le compte n'a encore aucun mot de passe (juste après une
+  // réinitialisation par le responsable, ou premier passage après
+  // l'introduction de cette fonctionnalité) — bascule le formulaire vers
+  // "créez votre mot de passe" au lieu de la connexion normale.
+  const [claimMember, setClaimMember] = useState(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [newPassword2, setNewPassword2] = useState("");
 
   const submitCollab = async (e) => {
     e.preventDefault();
     setError("");
     const em = email.trim().toLowerCase();
-    if (!em || !name.trim()) return setError("Renseignez votre nom et votre e-mail.");
-    let existing = members.find((m) => m.email.toLowerCase() === em);
-    if (existing) {
-      onLogin(existing);
+    if (!em || !password) return setError("Renseignez votre e-mail et votre mot de passe.");
+    setBusy(true);
+    const result = await loginMember(em, password);
+    setBusy(false);
+    if (result.error === "not_found") {
+      return setError("Aucun compte trouvé avec cet e-mail. Demandez un lien d'invitation à votre responsable pour créer votre compte.");
+    }
+    if (result.needsPassword) {
+      setClaimMember(result.member);
       return;
     }
-    setError("Aucun compte trouvé avec cet e-mail. Demandez un lien d'invitation à votre responsable pour créer votre compte.");
+    if (result.error === "invalid_password") {
+      return setError("Mot de passe incorrect.");
+    }
+    if (result.ok) {
+      onLogin(result.member);
+      return;
+    }
+    setError("Connexion impossible — vérifiez votre connexion et réessayez.");
+  };
+
+  const submitClaim = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (newPassword.length < PASSWORD_MIN_LEN) return setError(`Le mot de passe doit contenir au moins ${PASSWORD_MIN_LEN} caractères.`);
+    if (newPassword !== newPassword2) return setError("Les deux mots de passe ne correspondent pas.");
+    setBusy(true);
+    try {
+      await setMemberPassword(claimMember.id, newPassword);
+      onLogin(claimMember);
+    } catch {
+      setError("Impossible d'enregistrer le mot de passe — réessayez.");
+    }
+    setBusy(false);
   };
 
   const submitManager = async (e) => {
@@ -660,19 +717,22 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
+    <div
+      className="min-h-screen flex items-center justify-center px-4"
+      style={{ background: `radial-gradient(circle at 50% -10%, ${THEME.tealSoft} 0%, ${THEME.bg} 55%)` }}
+    >
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div
             className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4"
-            style={{ background: THEME.navy }}
+            style={{ background: `linear-gradient(155deg, ${THEME.navy}, #0A3B36)` }}
           >
             <TrendingUp size={26} color={THEME.teal} />
           </div>
-          <h1 style={{ fontFamily: FONT_DISPLAY, color: THEME.navy }} className="text-2xl font-semibold tracking-tight">
+          <h1 style={{ fontFamily: FONT_DISPLAY, color: THEME.navy, letterSpacing: "-0.01em" }} className="text-3xl font-semibold">
             Suivi Commercial
           </h1>
-          <p className="text-sm mt-1" style={{ color: THEME.navySoft }}>
+          <p className="text-sm mt-1.5" style={{ color: THEME.navySoft }}>
             Assurances & crédits — objectifs du mois
           </p>
         </div>
@@ -683,7 +743,7 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
         >
           <div className="flex" style={{ borderBottom: `1px solid ${THEME.line}` }}>
             <button
-              onClick={() => { setMode("collab"); setError(""); }}
+              onClick={() => { setMode("collab"); setError(""); setClaimMember(null); }}
               className="flex-1 py-3 text-sm font-medium transition-colors"
               style={{
                 color: mode === "collab" ? THEME.teal : THEME.navySoft,
@@ -693,7 +753,7 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
               Collaborateur
             </button>
             <button
-              onClick={() => { setMode("manager"); setError(""); }}
+              onClick={() => { setMode("manager"); setError(""); setClaimMember(null); }}
               className="flex-1 py-3 text-sm font-medium transition-colors flex items-center justify-center gap-1.5"
               style={{
                 color: mode === "manager" ? MANAGER_ACCENT : THEME.navySoft,
@@ -704,54 +764,95 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
             </button>
           </div>
 
-          <form onSubmit={mode === "collab" ? submitCollab : submitManager} className="p-6 space-y-4">
-            <Field label="Nom complet">
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Prénom Nom"
-                className="w-full px-3.5 py-2.5 rounded-lg text-sm"
-                style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
-              />
-            </Field>
-            <Field label={mode === "collab" ? "Adresse e-mail" : "E-mail professionnel"}>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="prenom.nom@monentreprise.be"
-                className="w-full px-3.5 py-2.5 rounded-lg text-sm"
-                style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
-              />
-            </Field>
-            {mode === "manager" && (
-              <Field label="Code d'accès responsable">
+          {mode === "collab" && claimMember ? (
+            <form onSubmit={submitClaim} className="p-6 space-y-4">
+              <div className="flex items-center gap-2 text-sm px-3 py-2.5 rounded-lg" style={{ background: THEME.tealSoft, color: THEME.teal }}>
+                <KeyRound size={15} className="flex-shrink-0" />
+                <span>Aucun mot de passe n'est encore défini pour <strong>{claimMember.name}</strong>. Créez-en un pour continuer.</span>
+              </div>
+              <Field label="Nouveau mot de passe">
+                <PasswordInput value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" />
+              </Field>
+              <Field label="Confirmer le mot de passe">
+                <PasswordInput value={newPassword2} onChange={(e) => setNewPassword2(e.target.value)} autoComplete="new-password" />
+              </Field>
+              {error && (
+                <div className="text-sm flex items-center gap-1.5" style={{ color: THEME.red }}>
+                  <AlertCircle size={14} /> {error}
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={busy}
+                className="sc-btn w-full py-2.5 rounded-lg text-sm font-semibold text-white flex items-center justify-center gap-1.5 transition-opacity hover:opacity-90 disabled:opacity-60"
+                style={{ background: THEME.teal, boxShadow: "0 8px 20px -6px rgba(11,107,96,0.45)" }}
+              >
+                Créer le mot de passe <ChevronRight size={15} />
+              </button>
+              <button type="button" onClick={() => { setClaimMember(null); setError(""); }} className="w-full text-center text-xs underline" style={{ color: THEME.navySoft }}>
+                Ce n'est pas moi / revenir à la connexion
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={mode === "collab" ? submitCollab : submitManager} className="p-6 space-y-4">
+              {mode === "manager" && (
+                <Field label="Nom complet">
+                  <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Prénom Nom"
+                    className="w-full px-3.5 py-2.5 rounded-lg text-sm"
+                    style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
+                  />
+                </Field>
+              )}
+              <Field label={mode === "collab" ? "Adresse e-mail" : "E-mail professionnel"}>
                 <input
-                  type="password"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  placeholder="••••••••"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="prenom.nom@monentreprise.be"
                   className="w-full px-3.5 py-2.5 rounded-lg text-sm"
                   style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
                 />
               </Field>
-            )}
-            {error && (
-              <div className="text-sm flex items-center gap-1.5" style={{ color: THEME.red }}>
-                <AlertCircle size={14} /> {error}
-              </div>
-            )}
-            <button
-              type="submit"
-              className="w-full py-2.5 rounded-lg text-sm font-semibold text-white flex items-center justify-center gap-1.5 transition-opacity hover:opacity-90"
-              style={{ background: THEME.navy }}
-            >
-              Entrer <ChevronRight size={15} />
-            </button>
-          </form>
+              {mode === "collab" && (
+                <Field label="Mot de passe">
+                  <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+                </Field>
+              )}
+              {mode === "manager" && (
+                <Field label="Code d'accès responsable">
+                  <input
+                    type="password"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    placeholder="••••••••"
+                    className="w-full px-3.5 py-2.5 rounded-lg text-sm"
+                    style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
+                  />
+                </Field>
+              )}
+              {error && (
+                <div className="text-sm flex items-center gap-1.5" style={{ color: THEME.red }}>
+                  <AlertCircle size={14} /> {error}
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={busy}
+                className="sc-btn w-full py-2.5 rounded-lg text-sm font-semibold text-white flex items-center justify-center gap-1.5 transition-opacity hover:opacity-90 disabled:opacity-60"
+                style={{ background: THEME.navy, boxShadow: "0 8px 20px -6px rgba(20,28,46,0.5)" }}
+              >
+                Entrer <ChevronRight size={15} />
+              </button>
+            </form>
+          )}
         </div>
         <p className="text-center text-xs mt-4" style={{ color: THEME.navySoft }}>
-          Connexion par identification e-mail. La création d'un compte collaborateur se fait uniquement via un lien d'invitation envoyé par votre responsable.
+          {mode === "collab"
+            ? "La création d'un compte collaborateur se fait uniquement via un lien d'invitation envoyé par votre responsable."
+            : "Connexion par identification e-mail et code d'accès responsable."}
         </p>
       </div>
     </div>
@@ -791,11 +892,16 @@ function ServerStatusBadge({ status }) {
 function AcceptInviteScreen({ token, invites, members, onCreateMember, onUpdateInvites, onLogin, onCancel, notify }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [password, setPassword] = useState("");
+  const [password2, setPassword2] = useState("");
   const invite = invites.find((i) => i.token === token);
 
   if (!invite || invite.used) {
     return (
-      <div className="min-h-screen flex items-center justify-center px-4">
+      <div
+        className="min-h-screen flex items-center justify-center px-4"
+        style={{ background: `radial-gradient(circle at 50% -10%, ${THEME.redSoft} 0%, ${THEME.bg} 55%)` }}
+      >
         <div className="w-full max-w-md text-center space-y-4">
           <AlertCircle size={32} style={{ color: THEME.red }} className="mx-auto" />
           <h1 className="text-lg font-semibold" style={{ fontFamily: FONT_DISPLAY, color: THEME.navy }}>
@@ -812,9 +918,12 @@ function AcceptInviteScreen({ token, invites, members, onCreateMember, onUpdateI
     );
   }
 
-  const activate = async () => {
-    setBusy(true);
+  const activate = async (e) => {
+    e.preventDefault();
     setError("");
+    if (password.length < PASSWORD_MIN_LEN) return setError(`Le mot de passe doit contenir au moins ${PASSWORD_MIN_LEN} caractères.`);
+    if (password !== password2) return setError("Les deux mots de passe ne correspondent pas.");
+    setBusy(true);
     const em = invite.email.toLowerCase();
     if (members.find((m) => m.email.toLowerCase() === em)) {
       setError("Un compte existe déjà avec cet e-mail — utilisez la connexion normale.");
@@ -836,6 +945,13 @@ function AcceptInviteScreen({ token, invites, members, onCreateMember, onUpdateI
       setBusy(false);
       return;
     }
+    try {
+      await setMemberPassword(newMember.id, password);
+    } catch {
+      setError("Compte créé, mais l'enregistrement du mot de passe a échoué — réessayez de vous connecter pour en définir un.");
+      setBusy(false);
+      return;
+    }
     const okInvites = await onUpdateInvites(
       invites.map((i) => (i.id === invite.id ? { ...i, used: true, usedAt: new Date().toISOString() } : i))
     );
@@ -845,24 +961,28 @@ function AcceptInviteScreen({ token, invites, members, onCreateMember, onUpdateI
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center px-4">
+    <div
+      className="min-h-screen flex items-center justify-center px-4"
+      style={{ background: `radial-gradient(circle at 50% -10%, ${THEME.tealSoft} 0%, ${THEME.bg} 55%)` }}
+    >
       <div className="w-full max-w-md">
         <div className="text-center mb-8">
           <div
             className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4"
-            style={{ background: THEME.navy }}
+            style={{ background: `linear-gradient(155deg, ${THEME.navy}, #0A3B36)` }}
           >
             <Users size={26} color={THEME.teal} />
           </div>
-          <h1 style={{ fontFamily: FONT_DISPLAY, color: THEME.navy }} className="text-2xl font-semibold tracking-tight">
+          <h1 style={{ fontFamily: FONT_DISPLAY, color: THEME.navy, letterSpacing: "-0.01em" }} className="text-3xl font-semibold">
             Invitation à rejoindre l'équipe
           </h1>
-          <p className="text-sm mt-1" style={{ color: THEME.navySoft }}>
+          <p className="text-sm mt-1.5" style={{ color: THEME.navySoft }}>
             Suivi Commercial — Assurances & crédits
           </p>
         </div>
 
-        <div
+        <form
+          onSubmit={activate}
           className="rounded-2xl overflow-hidden shadow-sm p-6 space-y-4"
           style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}
         >
@@ -873,23 +993,32 @@ function AcceptInviteScreen({ token, invites, members, onCreateMember, onUpdateI
             <div className="font-semibold">{invite.name}</div>
             <div style={{ color: THEME.navySoft }}>{invite.email}</div>
           </div>
+          <Field label="Créez votre mot de passe">
+            <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+          </Field>
+          <Field label="Confirmez le mot de passe">
+            <PasswordInput value={password2} onChange={(e) => setPassword2(e.target.value)} autoComplete="new-password" />
+          </Field>
+          <p className="text-xs" style={{ color: THEME.navySoft }}>
+            Ce mot de passe protège votre profil : lui seul (avec votre responsable en cas d'oubli) permettra d'y accéder.
+          </p>
           {error && (
             <div className="text-sm flex items-center gap-1.5" style={{ color: THEME.red }}>
               <AlertCircle size={14} /> {error}
             </div>
           )}
           <button
-            onClick={activate}
+            type="submit"
             disabled={busy}
-            className="w-full py-2.5 rounded-lg text-sm font-semibold text-white flex items-center justify-center gap-1.5 transition-opacity hover:opacity-90 disabled:opacity-60"
-            style={{ background: THEME.teal }}
+            className="sc-btn w-full py-2.5 rounded-lg text-sm font-semibold text-white flex items-center justify-center gap-1.5 transition-opacity hover:opacity-90 disabled:opacity-60"
+            style={{ background: THEME.teal, boxShadow: "0 8px 20px -6px rgba(11,107,96,0.45)" }}
           >
             Activer mon compte <ChevronRight size={15} />
           </button>
-          <button onClick={onCancel} className="w-full text-center text-xs underline" style={{ color: THEME.navySoft }}>
+          <button type="button" onClick={onCancel} className="w-full text-center text-xs underline" style={{ color: THEME.navySoft }}>
             Ce n'est pas moi / revenir à la connexion
           </button>
-        </div>
+        </form>
       </div>
     </div>
   );
@@ -906,6 +1035,34 @@ function Field({ label, children }) {
   );
 }
 
+// Champ mot de passe avec bouton afficher/masquer — utilisé partout où un
+// mot de passe se saisit (connexion, activation d'invitation, réinitialisation).
+function PasswordInput({ value, onChange, placeholder = "••••••••", autoComplete }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <div className="relative">
+      <input
+        type={visible ? "text" : "password"}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        autoComplete={autoComplete}
+        className="w-full pl-3.5 pr-10 py-2.5 rounded-lg text-sm"
+        style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
+      />
+      <button
+        type="button"
+        onClick={() => setVisible((v) => !v)}
+        tabIndex={-1}
+        className="absolute right-0 top-0 bottom-0 px-3 flex items-center"
+        aria-label={visible ? "Masquer le mot de passe" : "Afficher le mot de passe"}
+      >
+        {visible ? <EyeOff size={15} style={{ color: THEME.navySoft }} /> : <Eye size={15} style={{ color: THEME.navySoft }} />}
+      </button>
+    </div>
+  );
+}
+
 /* ---------------- MAIN APP ---------------- */
 function MainApp({ session, onLogout, members, setMembers, entries, setEntries, figures, deletionHistory, recordDeletion, restoreDeletion, invites, setInvites, creditRecords, setCreditRecords, tab, setTab, mKey, notify, onRefresh, refreshing }) {
   const isManager = session.role === "responsable";
@@ -916,12 +1073,16 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
     <div>
       <header
         className="sticky top-0 z-20 px-5 py-4 flex items-center justify-between"
-        style={{ background: isManager ? accent : THEME.card, borderBottom: isManager ? "none" : `1px solid ${THEME.line}` }}
+        style={{
+          background: isManager ? `linear-gradient(135deg, ${accent}, #4E1226)` : THEME.card,
+          borderBottom: isManager ? "none" : `1px solid ${THEME.line}`,
+          boxShadow: isManager ? "0 4px 20px -8px rgba(20,10,15,0.45)" : "0 1px 0 rgba(35,26,12,0.05)",
+        }}
       >
         <div>
           <div
-            style={{ fontFamily: FONT_DISPLAY, color: isManager ? "#fff" : THEME.navy }}
-            className="text-base font-semibold"
+            style={{ fontFamily: FONT_DISPLAY, color: isManager ? "#fff" : THEME.navy, letterSpacing: "-0.01em" }}
+            className="text-lg font-semibold"
           >
             Suivi Commercial
           </div>
@@ -1047,13 +1208,16 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
 }
 
 function TabButton({ active, onClick, icon: Icon, children, accent = THEME.teal }) {
+  const [hover, setHover] = useState(false);
   return (
     <button
       onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       className="flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg text-sm font-medium transition-colors"
       style={{
-        color: active ? accent : THEME.navySoft,
-        background: active ? THEME.card : "transparent",
+        color: active ? accent : hover ? THEME.navy : THEME.navySoft,
+        background: active ? THEME.card : hover ? "rgba(20,15,5,0.035)" : "transparent",
         borderBottom: active ? `2px solid ${accent}` : "2px solid transparent",
       }}
     >
@@ -2749,6 +2913,33 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteError, setInviteError] = useState("");
   const [copiedId, setCopiedId] = useState(null);
+  const [resettingId, setResettingId] = useState(null);
+  const [resetCode, setResetCode] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetError, setResetError] = useState("");
+
+  const startReset = (id) => {
+    setResettingId(id);
+    setResetCode("");
+    setResetError("");
+  };
+  const cancelReset = () => {
+    setResettingId(null);
+    setResetCode("");
+    setResetError("");
+  };
+  const confirmReset = async (member) => {
+    setResetBusy(true);
+    setResetError("");
+    try {
+      await resetMemberPassword(member.id, resetCode);
+      notify(`Mot de passe réinitialisé — ${member.name} pourra en créer un nouveau à sa prochaine connexion.`);
+      cancelReset();
+    } catch {
+      setResetError("Code d'accès responsable incorrect (ou échec réseau).");
+    }
+    setResetBusy(false);
+  };
 
   const removeMember = async (id) => {
     const member = members.find((m) => m.id === id);
@@ -2885,9 +3076,12 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
       </div>
 
       <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
-        <h2 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
+        <h2 className="text-sm font-semibold mb-1 flex items-center gap-1.5">
           <Users size={15} style={{ color: MANAGER_ACCENT }} /> Collaborateurs ({collaborators.length})
         </h2>
+        <p className="text-xs mb-3" style={{ color: THEME.navySoft }}>
+          Chaque collaborateur protège son profil par un mot de passe personnel. En cas d'oubli, l'icône <KeyRound size={11} className="inline align-text-top" /> réinitialise son mot de passe (il en recrée un nouveau à sa prochaine connexion) — ses ventes, objectifs et crédits financés restent intacts.
+        </p>
         {collaborators.length === 0 ? (
           <p className="text-sm py-4" style={{ color: THEME.navySoft }}>
             Aucun collaborateur n'a encore créé de compte. Ils apparaîtront ici dès leur première connexion.
@@ -2895,17 +3089,57 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
         ) : (
           <div className="space-y-2">
             {collaborators.map((m) => (
-              <div key={m.id} className="flex items-center justify-between px-3 py-2.5 rounded-lg text-sm" style={{ background: THEME.bg }}>
-                <div>
-                  <div className="font-medium">{m.name}</div>
-                  <div className="text-xs" style={{ color: THEME.navySoft }}>{m.email}</div>
+              <div key={m.id} className="rounded-lg" style={{ background: THEME.bg }}>
+                <div className="flex items-center justify-between px-3 py-2.5 text-sm gap-2 flex-wrap">
+                  <div>
+                    <div className="font-medium">{m.name}</div>
+                    <div className="text-xs" style={{ color: THEME.navySoft }}>{m.email}</div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs hidden md:inline" style={{ color: THEME.navySoft }}>
+                      Obj. {m.objectifAssurance ?? 5} assur. / {m.objectifCredit ?? 5} créd. / {formatEUR(m.objectifMontant ?? 5000)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => (resettingId === m.id ? cancelReset() : startReset(m.id))}
+                      className="p-1.5 rounded-md flex-shrink-0"
+                      aria-label="Réinitialiser le mot de passe"
+                      title="Réinitialiser le mot de passe"
+                    >
+                      <KeyRound size={14} style={{ color: resettingId === m.id ? MANAGER_ACCENT : THEME.navySoft }} />
+                    </button>
+                    <ConfirmActionButton onConfirm={() => removeMember(m.id)} label="Retirer" />
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs" style={{ color: THEME.navySoft }}>
-                    Obj. {m.objectifAssurance ?? 5} assur. / {m.objectifCredit ?? 5} créd. / {formatEUR(m.objectifMontant ?? 5000)}
-                  </span>
-                  <ConfirmActionButton onConfirm={() => removeMember(m.id)} label="Retirer" />
-                </div>
+                {resettingId === m.id && (
+                  <div className="px-3 pb-3 flex items-center gap-2 flex-wrap" style={{ borderTop: `1px solid ${THEME.line}` }}>
+                    <input
+                      type="password"
+                      value={resetCode}
+                      onChange={(e) => setResetCode(e.target.value)}
+                      placeholder="Code d'accès responsable"
+                      className="flex-1 min-w-[10rem] px-2.5 py-1.5 mt-3 rounded-lg text-xs"
+                      style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => confirmReset(m)}
+                      disabled={resetBusy || !resetCode}
+                      className="px-2.5 py-1.5 mt-3 rounded-lg text-xs font-semibold text-white disabled:opacity-60"
+                      style={{ background: MANAGER_ACCENT }}
+                    >
+                      Réinitialiser
+                    </button>
+                    <button type="button" onClick={cancelReset} className="px-2 py-1.5 mt-3 rounded-lg text-xs" style={{ color: THEME.navySoft }}>
+                      Annuler
+                    </button>
+                    {resetError && (
+                      <div className="w-full text-xs flex items-center gap-1" style={{ color: THEME.red }}>
+                        <AlertCircle size={12} /> {resetError}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

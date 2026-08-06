@@ -80,3 +80,48 @@ export async function verifyManagerCode(code) {
     return false;
   }
 }
+
+function apiPost(path, payload) {
+  return fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-App-Secret": APP_SECRET },
+    body: JSON.stringify(payload),
+  });
+}
+
+// Connexion collaborateur par e-mail + mot de passe. Le hash n'est jamais
+// transmis au navigateur — voir worker/index.js > /api/login-member.
+// Retourne { ok, member } si les identifiants sont valides, { needsPassword,
+// member } si aucun mot de passe n'est encore défini pour ce compte (juste
+// après activation ou après une réinitialisation par le responsable), ou
+// { error } sinon ("not_found" | "invalid_password").
+export async function loginMember(email, password) {
+  try {
+    const res = await apiPost("/api/login-member", { email, password });
+    const body = await res.json().catch(() => ({}));
+    return body;
+  } catch {
+    return { error: "network" };
+  }
+}
+
+// Définit (première fois) ou remplace (avec managerCode) le mot de passe
+// d'un collaborateur. Lève une erreur si le serveur refuse.
+export async function setMemberPassword(memberId, password, managerCode) {
+  const res = await apiPost("/api/set-password", { memberId, password, managerCode });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+}
+
+// Réinitialisation par le responsable : supprime le mot de passe existant
+// (le collaborateur pourra s'en redéfinir un à sa prochaine connexion) sans
+// toucher à ses données.
+export async function resetMemberPassword(memberId, managerCode) {
+  const res = await apiPost("/api/reset-password", { memberId, managerCode });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `HTTP ${res.status}`);
+  }
+}

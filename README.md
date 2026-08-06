@@ -20,6 +20,10 @@ npm run worker:dev
 - Cloudflare Worker + Assets statiques + KV (backend)
 - xlsx / SheetJS (export Excel)
 
+## Design
+
+Palette "encre & papier" (fond ivoire chaud, cartes blanches en légère élévation, accents navy/teal/ambre/or/bourgogne) et pairing typographique Fraunces (titres, gros chiffres — serif éditorial à graisse variable) + Inter (corps de texte), volontairement à l'écart des couples Space Grotesk/Sora omniprésents dans les interfaces générées automatiquement. Tous les tokens (couleurs, ombre de carte, polices) sont centralisés dans `THEME`, `MANAGER_ACCENT` et `FONT_DISPLAY`/`FONT_BODY` en tête de `src/App.jsx` — les modifier là se répercute sur toute l'application.
+
 ## Backend
 
 Le backend (`worker/index.js`) est un **Cloudflare Worker** unique qui sert à la fois les fichiers statiques du build (`dist/`, via le binding `ASSETS` déclaré dans `wrangler.toml`) et une API clé/valeur (`GET/PUT /api/storage/:key`) adossée à un namespace **Cloudflare KV**. C'est là que sont stockés les membres, les ventes déclarées et les chiffres officiels du mois — partagés par tous les utilisateurs, quel que soit leur navigateur ou appareil, sans serveur à gérer.
@@ -42,7 +46,7 @@ Ce rafraîchissement est silencieux (pas de notification, sauf en cas d'échec) 
 
 L'API (`/api/storage/*`) exige un header `X-App-Secret` correspondant à `APP_SECRET` — sans lui, impossible de lire ou d'écrire les données directement (curl, script, etc.) sans passer par l'application. Le frontend l'envoie automatiquement, sa valeur est injectée au build via la variable `VITE_APP_SECRET`.
 
-⚠️ Ce n'est **pas** une authentification par utilisateur : la valeur finit dans le fichier JS envoyé au navigateur, donc quelqu'un qui inspecte le bundle peut la récupérer. Ça bloque l'accès direct et non authentifié à l'API pour un visiteur ou un robot qui tomberait sur l'URL, mais ce n'est pas une protection contre quelqu'un de déterminé. Il n'y a par ailleurs pas de mot de passe à la connexion collaborateur (nom + e-mail suffisent) : à n'utiliser que dans un cadre de confiance (équipe restreinte, URL non publicisée). Pour une vraie protection, la prochaine étape recommandée est **Cloudflare Access** (Zero Trust, gratuit jusqu'à 50 utilisateurs) : il permet d'exiger une vérification d'e-mail avant que quiconque n'atteigne le site, y compris l'API — se configure entièrement depuis le dashboard Cloudflare (Zero Trust → Access → Applications), sans changement de code.
+⚠️ Ce n'est **pas** une authentification par utilisateur : la valeur finit dans le fichier JS envoyé au navigateur, donc quelqu'un qui inspecte le bundle peut la récupérer. Ça bloque l'accès direct et non authentifié à l'API pour un visiteur ou un robot qui tomberait sur l'URL, mais ce n'est pas une protection contre quelqu'un de déterminé — à n'utiliser que dans un cadre de confiance (équipe restreinte, URL non publicisée). La connexion collaborateur exige désormais un mot de passe personnel (voir "Mot de passe collaborateur" ci-dessous), qui empêche l'usurpation occasionnelle d'un profil par un collègue, mais ne remplace pas une vraie authentification côté infrastructure. Pour une vraie protection, la prochaine étape recommandée est **Cloudflare Access** (Zero Trust, gratuit jusqu'à 50 utilisateurs) : il permet d'exiger une vérification d'e-mail avant que quiconque n'atteigne le site, y compris l'API — se configure entièrement depuis le dashboard Cloudflare (Zero Trust → Access → Applications), sans changement de code.
 
 **`APP_SECRET` est défini directement dans `wrangler.toml`** (sous `[vars]`), pas via le dashboard Cloudflare. Ce choix vient d'un comportement observé sur ce projet : avec un déploiement Git-connecté exécutant `wrangler deploy`, les variables/secrets configurés dans le dashboard (que ce soit sous "Paramètres → Variables et secrets" ou sous "Liaisons") n'étaient jamais effectivement liés au Worker au moment du déploiement — seul `wrangler.toml` faisait foi (vérifiable dans les logs de build, qui listent "Your worker has access to the following bindings" et n'affichaient jamais `APP_SECRET`, contrairement à `STORAGE_KV` qui lui est déclaré dans `wrangler.toml`). Le mettre directement dans `wrangler.toml` élimine cette source d'échec — sans perte de confidentialité réelle puisque cette valeur est de toute façon publique côté client (voir ci-dessus).
 
@@ -109,8 +113,16 @@ Pour **PAT** et **BPR**, la saisie du jour se scinde en **Papier** et **eDirect*
 
 ## Comptes
 
-- **Collaborateur** : la création d'un compte se fait uniquement par **invitation** — voir ci-dessous. Une fois le compte créé, la connexion se fait ensuite par simple nom + e-mail (comme avant).
+- **Collaborateur** : la création d'un compte se fait uniquement par **invitation** — voir ci-dessous. À l'activation, le collaborateur choisit son propre **mot de passe** (6 caractères minimum) ; il se reconnecte ensuite par e-mail + mot de passe. Ceci empêche qu'un collaborateur se connecte sous l'identité d'un autre en tapant simplement son nom et son e-mail — voir "Mot de passe collaborateur" ci-dessous.
 - **Responsable** : nécessite le code d'accès, défini par `MANAGER_CODE` dans `wrangler.toml` (à personnaliser avant mise en production). Contrairement à `APP_SECRET`, ce code est vérifié côté Worker (`POST /api/verify-manager-code`) et n'est **jamais envoyé au navigateur** — sa valeur reste un vrai secret, invisible dans le bundle JS public.
+
+## Mot de passe collaborateur
+
+Chaque collaborateur protège son profil par un mot de passe personnel (6 caractères minimum), choisi au moment de l'activation de son invitation. La connexion se fait ensuite par **e-mail + mot de passe** (`POST /api/login-member`) : le hash du mot de passe (PBKDF2-SHA256 salé, 100 000 itérations) est stocké côté Worker dans une clé KV dédiée (`memberSecrets`), **jamais transmis au navigateur** et explicitement inaccessible via la route générique `/api/storage/:key` (403 sur cette clé précise). Un mot de passe erroné, ou un e-mail sans compte associé, affiche un message d'erreur explicite sans jamais révéler lequel des deux est en cause.
+
+**En cas d'oubli** : le responsable réinitialise le mot de passe d'un collaborateur depuis l'onglet **Équipe** (icône clé à côté de son nom), après avoir saisi le code d'accès responsable. Cette réinitialisation **supprime** simplement le mot de passe existant côté serveur — elle ne touche à aucune autre donnée du collaborateur (ventes déclarées, objectifs, crédits financés, historique). À sa prochaine tentative de connexion, l'application détecte l'absence de mot de passe et invite directement le collaborateur à en créer un nouveau, sans intervention supplémentaire du responsable.
+
+⚠️ Comme pour `APP_SECRET` (voir "Sécurité" ci-dessous), cette protection reste proportionnée au modèle de confiance de l'application : `APP_SECRET` étant public dans le bundle JS, quelqu'un de déterminé pourrait théoriquement appeler `/api/set-password` directement s'il connaît à la fois l'`id` interne d'un compte et une fenêtre où ce compte n'a *pas encore* de mot de passe (juste après une invitation ou une réinitialisation, avant que la personne concernée ne s'en crée un). Ce n'est pas une authentification à l'épreuve d'un attaquant motivé, mais ça ferme la faille pratique visée : un collègue qui se connecte au profil d'un autre en tapant simplement son nom et son e-mail.
 
 ## Invitation des collaborateurs
 
