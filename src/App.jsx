@@ -1393,11 +1393,29 @@ function JournalTab({ session, entries, setEntries, recordDeletion, isManager, m
     }
   };
 
-  const dayStats = (dayEntries) => ({
-    assurances: dayEntries.filter((e) => e.type === "assurance").reduce((s, e) => s + (e.quantite || 1), 0),
-    credits: dayEntries.filter((e) => e.type === "credit").length,
-    montant: dayEntries.reduce((s, e) => s + (e.montant || 0), 0),
-  });
+  // Récapitulatif du jour, une colonne par produit (comme le tableau papier
+  // de l'équipe) : nombre pour les assurances, montant pour les crédits —
+  // PAT et BPR scindés en Papier / eDirect.
+  const dayBreakdown = (dayEntries) => {
+    const assurance = Object.fromEntries(
+      ASSURANCE_TYPES.map((at) => [
+        at,
+        dayEntries.filter((e) => e.type === "assurance" && e.assuranceType === at).reduce((s, e) => s + (e.quantite || 1), 0),
+      ])
+    );
+    const credit = {};
+    CREDIT_TYPES.forEach((ct) => {
+      const matches = dayEntries.filter((e) => e.type === "credit" && e.creditType === ct);
+      if (CONTRACT_MODE_CREDIT_TYPES.includes(ct)) {
+        credit[ct] = Object.fromEntries(
+          CONTRACT_MODES.map((mode) => [mode, matches.filter((e) => e.contractMode === mode).reduce((s, e) => s + (e.montant || 0), 0)])
+        );
+      } else {
+        credit[ct] = matches.reduce((s, e) => s + (e.montant || 0), 0);
+      }
+    });
+    return { assurance, credit };
+  };
 
   return (
     <div className="space-y-5">
@@ -1452,31 +1470,15 @@ function JournalTab({ session, entries, setEntries, recordDeletion, isManager, m
         </div>
       ) : (
         byDay.map(([date, dayEntries]) => {
-          const { assurances, credits, montant } = dayStats(dayEntries);
+          const breakdown = dayBreakdown(dayEntries);
           return (
             <div key={date} className="rounded-2xl overflow-hidden" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
               <div
-                className="px-5 py-3 flex items-center justify-between flex-wrap gap-2"
+                className="px-5 py-3"
                 style={{ borderBottom: `1px solid ${THEME.line}`, background: THEME.bg }}
               >
-                <div className="text-sm font-semibold capitalize">{dayLabel(date)}</div>
-                <div className="flex items-center gap-3 text-xs" style={{ color: THEME.navySoft }}>
-                  {assurances > 0 && (
-                    <span className="flex items-center gap-1">
-                      <Shield size={12} style={{ color: THEME.teal }} /> {assurances}
-                    </span>
-                  )}
-                  {credits > 0 && (
-                    <span className="flex items-center gap-1">
-                      <CreditCard size={12} style={{ color: THEME.amber }} /> {credits}
-                    </span>
-                  )}
-                  {montant > 0 && (
-                    <span className="font-medium" style={{ color: THEME.navy }}>
-                      {formatEUR(montant)}
-                    </span>
-                  )}
-                </div>
+                <div className="text-sm font-semibold capitalize mb-2">{dayLabel(date)}</div>
+                <RecapTable breakdown={breakdown} />
               </div>
               <div className="p-3 space-y-2">
                 {dayEntries.map((e) => (
@@ -1517,6 +1519,75 @@ function JournalTab({ session, entries, setEntries, recordDeletion, isManager, m
           );
         })
       )}
+    </div>
+  );
+}
+
+// Récapitulatif du jour en tableau — une colonne par produit, PAT/BPR
+// scindés en Papier/eDirect — reprenant la présentation du tableau papier
+// utilisé par l'équipe. Zone teal = assurances (nombre), zone ambre =
+// crédits (montant financé).
+function RecapTable({ breakdown }) {
+  const cellStyle = { padding: "4px 8px", textAlign: "center", fontVariantNumeric: "tabular-nums" };
+  const Cell = ({ value, format = (v) => v }) => (
+    <td style={cellStyle}>
+      {value > 0 ? (
+        <span className="font-semibold" style={{ color: THEME.navy }}>{format(value)}</span>
+      ) : (
+        <span style={{ color: THEME.line }}>–</span>
+      )}
+    </td>
+  );
+  const Head = ({ children, bg, colSpan, rowSpan }) => (
+    <th
+      colSpan={colSpan}
+      rowSpan={rowSpan}
+      className="text-[10px] font-semibold uppercase tracking-wide whitespace-nowrap"
+      style={{ padding: "4px 8px", background: bg, color: THEME.navySoft, borderBottom: `1px solid ${THEME.line}` }}
+    >
+      {children}
+    </th>
+  );
+
+  return (
+    <div className="overflow-x-auto -mx-1">
+      <table className="border-collapse mx-1" style={{ minWidth: 560 }}>
+        <thead>
+          <tr>
+            {ASSURANCE_TYPES.map((at) => (
+              <Head key={at} bg={THEME.tealSoft} rowSpan={2}>{at}</Head>
+            ))}
+            {CREDIT_TYPES.map((ct) => (
+              <Head key={ct} bg={THEME.amberSoft} colSpan={CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? 2 : 1} rowSpan={CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? 1 : 2}>
+                {ct}
+              </Head>
+            ))}
+          </tr>
+          <tr>
+            {CREDIT_TYPES.filter((ct) => CONTRACT_MODE_CREDIT_TYPES.includes(ct)).flatMap((ct) =>
+              CONTRACT_MODES.map((mode) => (
+                <Head key={`${ct}-${mode}`} bg={THEME.amberSoft}>{mode}</Head>
+              ))
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            {ASSURANCE_TYPES.map((at) => (
+              <Cell key={at} value={breakdown.assurance[at]} />
+            ))}
+            {CREDIT_TYPES.map((ct) =>
+              CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? (
+                CONTRACT_MODES.map((mode) => (
+                  <Cell key={`${ct}-${mode}`} value={breakdown.credit[ct][mode]} format={formatEUR} />
+                ))
+              ) : (
+                <Cell key={ct} value={breakdown.credit[ct]} format={formatEUR} />
+              )
+            )}
+          </tr>
+        </tbody>
+      </table>
     </div>
   );
 }
