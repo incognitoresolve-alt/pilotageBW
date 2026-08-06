@@ -534,17 +534,22 @@ export default function App() {
         .sc-btn { transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease; }
         .sc-btn:hover { transform: translateY(-1px); }
         .sc-btn:active { transform: translateY(0); }
+        /* Bandeau d'onglets défilable horizontalement sur mobile (au lieu de
+           déborder hors de l'écran) — scrollbar masquée, le défilement au
+           doigt reste possible (overflow-x-auto sur le <nav>). */
+        .sc-scroll-x { scrollbar-width: none; -ms-overflow-style: none; }
+        .sc-scroll-x::-webkit-scrollbar { display: none; }
       `}</style>
 
       {toast && (
         <div
-          className="sc-toast fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium flex items-center gap-2"
+          className="sc-toast fixed top-4 right-4 left-4 sm:left-auto z-50 px-4 py-3 rounded-lg shadow-lg text-sm font-medium flex items-start gap-2 sm:max-w-md"
           style={{ background: toast.isError ? THEME.red : THEME.navy, color: "#fff" }}
         >
           {toast.isError ? (
-            <AlertCircle size={16} />
+            <AlertCircle size={16} className="flex-shrink-0 mt-0.5" />
           ) : (
-            <CheckCircle2 size={16} style={{ color: THEME.teal }} />
+            <CheckCircle2 size={16} className="flex-shrink-0 mt-0.5" style={{ color: THEME.teal }} />
           )}
           {toast.msg}
         </div>
@@ -1125,7 +1130,7 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
         </div>
       </header>
 
-      <nav className="flex gap-1 px-5 pt-4 max-w-5xl mx-auto">
+      <nav className="flex gap-1 px-5 pt-4 max-w-5xl mx-auto overflow-x-auto sc-scroll-x">
         <TabButton active={tab === "saisie"} onClick={() => setTab("saisie")} icon={ClipboardList} accent={accent}>
           Ma saisie
         </TabButton>
@@ -1216,7 +1221,7 @@ function TabButton({ active, onClick, icon: Icon, children, accent = THEME.teal 
       onClick={onClick}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      className="flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg text-sm font-medium transition-colors"
+      className="flex items-center gap-1.5 px-3.5 py-2 rounded-t-lg text-sm font-medium transition-colors flex-shrink-0 whitespace-nowrap"
       style={{
         color: active ? accent : hover ? THEME.navy : THEME.navySoft,
         background: active ? THEME.card : hover ? "rgba(20,15,5,0.035)" : "transparent",
@@ -1325,7 +1330,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
   const countCredit = myEntries.filter((e) => e.type === "credit").length;
 
   return (
-    <div className="grid md:grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
         <h2 className="text-sm font-semibold mb-4 flex items-center gap-1.5">
           {editingEntryId ? (
@@ -1546,7 +1551,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
                     </span>
                     <button
                       onClick={() => startEditEntry(e)}
-                      className="p-1.5 rounded-md flex-shrink-0"
+                      className="p-2 rounded-md flex-shrink-0"
                       aria-label="Modifier"
                     >
                       <Pencil size={14} style={{ color: THEME.navySoft }} />
@@ -1812,7 +1817,7 @@ function ConfirmActionButton({
         <button
           type="button"
           onClick={() => setArmed(false)}
-          className="p-1.5 rounded-md"
+          className="p-2 rounded-md"
           aria-label="Annuler"
         >
           <X size={14} style={{ color: THEME.navySoft }} />
@@ -1826,7 +1831,7 @@ function ConfirmActionButton({
       <button
         type="button"
         onClick={() => setArmed(true)}
-        className="p-1.5 rounded-md flex-shrink-0"
+        className="p-2 rounded-md flex-shrink-0"
         aria-label={label}
       >
         <Icon size={14} style={{ color }} />
@@ -2115,7 +2120,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
           <p className="text-xs mb-4" style={{ color: THEME.navySoft }}>
             S'applique à tous les collaborateurs ({collaborators.length}) en une fois — les objectifs individuels restent modifiables ensuite via "Mettre à jour" sur chaque collaborateur.
           </p>
-          <div className="grid sm:grid-cols-3 gap-3 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
             <Field label="Objectif assurances (nombre)">
               <input
                 type="number"
@@ -2221,7 +2226,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
               )}
             </div>
 
-            <div className="p-5 grid sm:grid-cols-3 gap-4">
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-3 gap-4">
               <ProgressBlock
                 icon={Shield}
                 label="Assurances"
@@ -2313,7 +2318,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
                       style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
                     />
                   </label>
-                  <div className="grid sm:grid-cols-2 gap-2 mb-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
                     {CREDIT_TYPES.map((ct) =>
                       CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? (
                         <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
@@ -3104,7 +3109,7 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
                     <button
                       type="button"
                       onClick={() => (resettingId === m.id ? cancelReset() : startReset(m.id))}
-                      className="p-1.5 rounded-md flex-shrink-0"
+                      className="p-2 rounded-md flex-shrink-0"
                       aria-label="Réinitialiser le mot de passe"
                       title="Réinitialiser le mot de passe"
                     >
