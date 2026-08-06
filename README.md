@@ -75,9 +75,19 @@ L'API (`/api/storage/*`) exige un header `X-App-Secret` correspondant à `APP_SE
 
 Dans l'onglet **Suivi & objectifs**, le responsable dispose d'un bouton **Exporter en Excel** qui télécharge un fichier `.xlsx` (`suivi-commercial-AAAA-MM.xlsx`) avec, pour chaque collaborateur : assurances réalisées/objectif, détail des crédits par type (PAT/OCA/BPR/MP7), total crédits/objectif, et nombre de dossiers déclarés dans le journal. Pratique à générer en fin de mois pour archiver les chiffres officiels de toute l'équipe.
 
-## Graphique de performance
+## Graphique de performance (assurances)
 
-Dans **Suivi & objectifs**, chaque carte collaborateur affiche un graphique linéaire "Performance — dossiers vendus" (nombre de ventes déclarées, assurances + crédits confondus, pondéré par la quantité pour les assurances). Quatre bascules — **Jour** (14 derniers jours), **Semaine** (8 dernières semaines), **Mois** (6 derniers mois), **Année** (5 dernières années) — recalculent la série depuis le journal des ventes déclarées, tous mois confondus (contrairement au reste de l'onglet qui reste centré sur le mois consulté). Survoler le graphique affiche un repère + une infobulle ; un détail chiffré par période (tableau) est disponible sous le graphique, replié par défaut, pour un accès sans souris.
+Dans **Suivi & objectifs**, un graphique linéaire jaune "Performance — assurances vendues" affiche le nombre d'assurances déclarées (pondéré par la quantité). Il apparaît à deux niveaux :
+- un graphique **équipe** ("Performance équipe — Assurances DirectSales"), agrégeant tous les collaborateurs, en haut de l'onglet — visible par le responsable et les collaborateurs ;
+- un graphique **par collaborateur**, sur sa carte.
+
+Quatre bascules — **Jour** (14 derniers jours), **Semaine** (8 dernières semaines), **Mois** (6 derniers mois), **Année** (5 dernières années) — recalculent la série depuis le journal des ventes déclarées, tous mois confondus (contrairement au reste de l'onglet qui reste centré sur le mois consulté). Survoler le graphique affiche un repère + une infobulle ; un détail chiffré par période (tableau) est disponible sous le graphique, replié par défaut, pour un accès sans souris.
+
+Côté **responsable**, la carte de chaque collaborateur dans Suivi & objectifs se limite désormais aux chiffres-clés (Assurances/Crédits/Montant) et à ce graphique — le récapitulatif du jour (voir plus bas) n'y apparaît plus, pour rester concentré sur la performance. Un collaborateur continue de voir son propre récapitulatif du jour sur sa carte.
+
+## Classement
+
+L'onglet **Classement** (visible par tous, responsable comme collaborateurs) liste les collaborateurs du mois en cours, triés par **crédits financés** (le chiffre officiel validé par le responsable) — il se met donc à jour dès qu'un responsable enregistre une saisie de crédits du jour. Les 3 premiers ont un badge de rang coloré (or/argent/bronze) ; le nombre d'assurances et le montant vendu (déclarés par le collaborateur) sont affichés à titre de repère à côté du classement.
 
 ## Journal des ventes
 
@@ -85,9 +95,9 @@ L'onglet **Journal** offre une vue structurée des ventes, jour par jour (au lie
 
 Le récapitulatif de chaque jour reprend la présentation du tableau papier utilisé par l'équipe : une grille de puces responsive avec une puce par produit (ALLIN, DIMC, DIM pour les assurances ; PAT, OCA, BPR, MP7, AUG, DIM pour les crédits — PAT et BPR scindés en Papier/eDirect), plutôt qu'un simple total. Zone teal = assurances (nombre), zone ambre = crédits (montant) ; les puces sans activité s'effacent visuellement (fond neutre, tiret) pour que l'œil aille directement à ce qui bouge. La grille s'adapte à toutes les largeurs d'écran, sans défilement horizontal.
 
-Ce même récapitulatif du jour (« Assurances »/« Crédits financés » en puces) apparaît aussi :
-- dans **Ma saisie**, sous "Mes ventes du jour", pour que le collaborateur suive sa propre journée en un coup d'œil ;
-- dans **Suivi & objectifs**, sur la carte de chaque collaborateur (visible par le responsable comme par le collaborateur lui-même), pour suivre l'avancée du jour de chacun sans avoir à ouvrir le Journal.
+Ce même récapitulatif du jour apparaît aussi :
+- dans **Ma saisie**, sous "Mes ventes du jour" — mais uniquement la partie crédits, renommée **« Vente en instance »** (la section « Assurances » n'y est pas répétée, déjà suivie via le graphique de performance) ;
+- dans **Suivi & objectifs**, sur la carte d'un collaborateur pour son propre profil (Assurances + Crédits financés) — absent en revanche de la vue responsable, qui reste centrée sur les chiffres-clés et le graphique de performance (voir plus bas).
 
 ## Crédits financés — saisie quotidienne du responsable
 

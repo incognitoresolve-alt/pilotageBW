@@ -3,7 +3,7 @@ import {
   Shield, CreditCard, Users, LogOut, Plus, Trash2, CheckCircle2,
   Calendar, Settings, ChevronRight, ChevronLeft, Lock, TrendingUp, ClipboardList,
   AlertCircle, Award, X, Download, Euro, History, RotateCcw, Pencil, Link2, Copy,
-  RefreshCw, Loader2, BarChart3
+  RefreshCw, Loader2, BarChart3, Trophy
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { verifyManagerCode } from "./lib/storage";
@@ -152,16 +152,17 @@ function buildPeriodBuckets(granularity, refDate = new Date()) {
   return buckets;
 }
 // "Performance" = nombre de dossiers vendus (assurances, pondérées par la
-// quantité déclarée, + crédits) — une unité de mesure commune quel que soit
-// le produit, cohérente avec les compteurs déjà affichés dans "Ma saisie".
+// quantité déclarée) — personId=null agrège tous les collaborateurs (vue
+// département).
 function performanceSeries(entries, personId, granularity) {
   const buckets = buildPeriodBuckets(granularity);
-  const mine = entries.filter((e) => e.personId === personId);
+  const scoped = personId ? entries.filter((e) => e.personId === personId) : entries;
   return buckets.map((b) => ({
     ...b,
-    value: mine.reduce((s, e) => {
+    value: scoped.reduce((s, e) => {
+      if (e.type !== "assurance") return s;
       if (e.date < b.startISO || e.date > b.endISO) return s;
-      return s + (e.type === "assurance" ? e.quantite || 1 : 1);
+      return s + (e.quantite || 1);
     }, 0),
   }));
 }
@@ -589,6 +590,8 @@ const THEME = {
   tealSoft: "#D7EDE9",
   amber: "#C08A2E",
   amberSoft: "#F5E7CD",
+  yellow: "#C9A227",
+  yellowSoft: "#F6EFCE",
   red: "#B4384A",
   redSoft: "#F5DCE0",
   card: "#FFFFFF",
@@ -964,6 +967,9 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
         <TabButton active={tab === "suivi"} onClick={() => setTab("suivi")} icon={Award} accent={accent}>
           Suivi & objectifs
         </TabButton>
+        <TabButton active={tab === "classement"} onClick={() => setTab("classement")} icon={Trophy} accent={accent}>
+          Classement
+        </TabButton>
         {isManager && (
           <TabButton active={tab === "equipe"} onClick={() => setTab("equipe")} icon={Users} accent={accent}>
             Équipe
@@ -1012,6 +1018,9 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
             notify={notify}
             isManager={isManager}
           />
+        )}
+        {tab === "classement" && (
+          <ClassementTab members={members} entries={entries} figures={figures} creditRecords={creditRecords} mKey={mKey} />
         )}
         {tab === "equipe" && isManager && (
           <EquipeTab
@@ -1334,7 +1343,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
             </button>
           </div>
           <div className="mb-4">
-            <RecapGrid entries={todayEntries} />
+            <RecapGrid entries={todayEntries} showAssurance={false} creditTitle="Vente en instance" />
           </div>
           {todayEntries.length === 0 ? (
             <p className="text-sm py-6 text-center" style={{ color: THEME.navySoft }}>
@@ -1533,7 +1542,7 @@ function JournalTab({ session, entries, setEntries, recordDeletion, isManager, m
 // s'adapte à toutes les largeurs d'écran). Les puces sans activité
 // s'effacent visuellement (fond neutre, valeur en tiret) pour que l'œil
 // aille droit à ce qui bouge.
-function RecapGrid({ entries }) {
+function RecapGrid({ entries, showAssurance = true, creditTitle = "Crédits financés" }) {
   const breakdown = entriesBreakdown(entries);
   const assuranceChips = ASSURANCE_TYPES.map((at) => ({ key: at, label: at, value: breakdown.assurance[at], format: (v) => v }));
   const creditChips = CREDIT_TYPES.flatMap((ct) =>
@@ -1544,8 +1553,10 @@ function RecapGrid({ entries }) {
 
   return (
     <div className="space-y-3">
-      <RecapSection title="Assurances" chips={assuranceChips} tint={THEME.tealSoft} accent={THEME.teal} cols="grid-cols-3" />
-      <RecapSection title="Crédits financés" chips={creditChips} tint={THEME.amberSoft} accent={THEME.amber} cols="grid-cols-2 sm:grid-cols-4" />
+      {showAssurance && (
+        <RecapSection title="Assurances" chips={assuranceChips} tint={THEME.tealSoft} accent={THEME.teal} cols="grid-cols-3" />
+      )}
+      <RecapSection title={creditTitle} chips={creditChips} tint={THEME.amberSoft} accent={THEME.amber} cols="grid-cols-2 sm:grid-cols-4" />
     </div>
   );
 }
@@ -1964,6 +1975,18 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
         </div>
       )}
 
+      {collaborators.length > 0 && (
+        <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+          <PerformanceChart
+            entries={entries}
+            personId={null}
+            ariaName={null}
+            title="Performance équipe — Assurances DirectSales"
+            color={THEME.yellow}
+          />
+        </div>
+      )}
+
       {visibleMembers.length === 0 && (
         <p className="text-sm text-center py-10" style={{ color: THEME.navySoft }}>
           Aucun collaborateur pour l'instant.
@@ -2074,7 +2097,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
               />
             </div>
 
-            {isCurrentMonth && (
+            {isCurrentMonth && !isManager && (
               <div className="px-5 pb-5">
                 <div className="text-xs font-semibold mb-2 flex items-center gap-1.5" style={{ color: THEME.navySoft }}>
                   <Calendar size={13} /> Récapitulatif du jour
@@ -2084,7 +2107,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
             )}
 
             <div className="px-5 pb-5">
-              <PerformanceChart entries={entries} member={member} />
+              <PerformanceChart entries={entries} personId={member.id} ariaName={member.name} color={THEME.yellow} />
             </div>
 
             {isEditing && (
@@ -2396,13 +2419,13 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
 // Graphique linéaire de performance (dossiers vendus) d'un collaborateur —
 // bascule Jour/Semaine/Mois/Année, survol avec repère + infobulle, et un
 // détail sous forme de tableau (accessible sans passer par la souris).
-function PerformanceChart({ entries, member, color = THEME.teal }) {
+function PerformanceChart({ entries, personId = null, ariaName, title = "Performance — assurances vendues", color = THEME.yellow }) {
   const [granularity, setGranularity] = useState("mois");
   const [hoverIdx, setHoverIdx] = useState(null);
 
   const series = useMemo(
-    () => performanceSeries(entries, member.id, granularity),
-    [entries, member.id, granularity]
+    () => performanceSeries(entries, personId, granularity),
+    [entries, personId, granularity]
   );
 
   const W = 600;
@@ -2442,7 +2465,7 @@ function PerformanceChart({ entries, member, color = THEME.teal }) {
     <div className="rounded-xl p-4" style={{ background: THEME.bg }}>
       <div className="flex items-center justify-between flex-wrap gap-2 mb-1">
         <div className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: THEME.navySoft }}>
-          <BarChart3 size={14} style={{ color }} /> Performance — dossiers vendus
+          <BarChart3 size={14} style={{ color }} /> {title}
         </div>
         <div className="flex gap-1 rounded-lg p-0.5" style={{ background: THEME.card }}>
           {PERIOD_OPTIONS.map((p) => (
@@ -2473,7 +2496,7 @@ function PerformanceChart({ entries, member, color = THEME.teal }) {
           onMouseMove={handleMove}
           onMouseLeave={() => setHoverIdx(null)}
           role="img"
-          aria-label={`Évolution du nombre de dossiers vendus par ${member.name}, par ${granularity}`}
+          aria-label={`Évolution des assurances vendues ${ariaName ? `par ${ariaName}` : "pour toute l'équipe"}, par ${granularity}`}
         >
           <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={THEME.line} strokeWidth="1" />
           <path d={areaPath} fill={color} opacity="0.1" stroke="none" />
@@ -2545,6 +2568,103 @@ function PerformanceTable({ series }) {
         ))}
       </div>
     </details>
+  );
+}
+
+/* ---------------- CLASSEMENT TAB (visible responsable + collaborateur) ---------------- */
+// Classement du mois en cours, trié par crédits financés (le chiffre
+// officiel validé par le responsable) — se met donc à jour dès que le
+// responsable enregistre une saisie de crédits du jour. Assurances et
+// montant vendu (déclarés par le collaborateur) restent affichés à titre
+// de repère, sans entrer dans le tri.
+function ClassementTab({ members, entries, figures, creditRecords, mKey }) {
+  const collaborators = members.filter((m) => m.role === "collaborateur");
+  const monthFigures = figures[mKey] || {};
+
+  const ranked = useMemo(
+    () =>
+      collaborators
+        .map((m) => {
+          const f = monthFigures[m.id] || emptyFigures();
+          const declared = entries.filter((e) => e.personId === m.id && e.date.slice(0, 7) === mKey);
+          const assurances = declared.filter((e) => e.type === "assurance").reduce((s, e) => s + (e.quantite || 1), 0);
+          const montantVendu = declared.reduce((s, e) => s + (e.montant || 0), 0);
+          const creditParType = creditRealiseParTypeFor(f, creditRecords, m.id, mKey);
+          const creditsTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditParType[ct] || 0), 0);
+          return { member: m, assurances, montantVendu, creditsTotal };
+        })
+        .sort((a, b) => b.creditsTotal - a.creditsTotal),
+    [collaborators, entries, monthFigures, creditRecords, mKey]
+  );
+
+  const medal = (i) => (i === 0 ? "#D4AF37" : i === 1 ? "#9AA0A6" : i === 2 ? "#B08D57" : null);
+
+  return (
+    <div className="space-y-5">
+      <div className="rounded-2xl p-4 flex items-center gap-3" style={{ background: THEME.navy, color: "#fff" }}>
+        <Trophy size={18} style={{ color: THEME.yellow }} />
+        <div className="text-sm">
+          Classement — <span className="capitalize">{monthLabel()}</span> · trié par crédits financés
+        </div>
+      </div>
+
+      {ranked.length === 0 ? (
+        <div className="rounded-2xl p-10 text-center" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+          <p className="text-sm" style={{ color: THEME.navySoft }}>
+            Aucun collaborateur pour l'instant.
+          </p>
+        </div>
+      ) : (
+        <div className="rounded-2xl overflow-hidden" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+          {ranked.map((r, i) => (
+            <div
+              key={r.member.id}
+              className="flex items-center gap-3 px-5 py-4 flex-wrap sm:flex-nowrap"
+              style={{ borderBottom: i < ranked.length - 1 ? `1px solid ${THEME.line}` : "none" }}
+            >
+              <div
+                className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0"
+                style={{ background: medal(i) || THEME.bg, color: medal(i) ? "#fff" : THEME.navySoft }}
+              >
+                {i + 1}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold text-sm truncate">{r.member.name}</div>
+                <div className="text-xs truncate" style={{ color: THEME.navySoft }}>
+                  {r.member.email}
+                </div>
+              </div>
+              <div className="flex items-center gap-4 flex-shrink-0 text-right ml-11 sm:ml-0">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: THEME.navySoft }}>
+                    Assurances
+                  </div>
+                  <div className="text-sm font-semibold" style={{ fontFamily: FONT_DISPLAY, color: THEME.teal }}>
+                    {r.assurances}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: THEME.navySoft }}>
+                    Crédits
+                  </div>
+                  <div className="text-sm font-semibold" style={{ fontFamily: FONT_DISPLAY, color: THEME.amber }}>
+                    {formatEUR(r.creditsTotal)}
+                  </div>
+                </div>
+                <div className="hidden sm:block">
+                  <div className="text-[10px] uppercase tracking-wide" style={{ color: THEME.navySoft }}>
+                    Montant vendu
+                  </div>
+                  <div className="text-sm font-semibold" style={{ fontFamily: FONT_DISPLAY, color: THEME.navy }}>
+                    {formatEUR(r.montantVendu)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
