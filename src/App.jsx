@@ -596,23 +596,24 @@ export default function App() {
 }
 
 /* ---------------- THEME ---------------- */
-// Palette "encre & papier" : fond ivoire chaud plutôt que le gris-bleu
-// froid par défaut des templates SaaS, bordures et cartes assorties pour
-// une profondeur discrète (voir SHADOW_2XL) plutôt que des aplats plats.
+// Palette "navy & laiton" (banque privée) : bleu marine très profond,
+// laiton/or discret, bourgogne pour le responsable, sur fond crème neutre
+// — cartes en légère élévation (voir SHADOW_CARD) plutôt que des aplats
+// pastel façon SaaS générique.
 const THEME = {
-  bg: "#F6F3EC",
-  navy: "#141C2E",
-  navySoft: "#5B6478",
-  teal: "#0B6B60",
-  tealSoft: "#DCEEE9",
-  amber: "#AD7A22",
-  amberSoft: "#F3E4C6",
-  yellow: "#BE9A26",
-  yellowSoft: "#F6EFCE",
-  red: "#A6334A",
-  redSoft: "#F5DCE0",
+  bg: "#F7F4EC",
+  navy: "#0F1B33",
+  navySoft: "#4A5568",
+  teal: "#1F5C4B",
+  tealSoft: "#DCEAE5",
+  amber: "#A67C27",
+  amberSoft: "#F0E3C4",
+  yellow: "#BF9440",
+  yellowSoft: "#F3E9D6",
+  red: "#8C2A3A",
+  redSoft: "#F3DEE2",
   card: "#FFFFFF",
-  line: "#E7E1D3",
+  line: "#E3DECF",
 };
 // Accent distinct pour l'interface responsable (nav, boutons d'action
 // manager) — permet de voir d'un coup d'œil dans quel mode on est,
@@ -625,11 +626,12 @@ const MANAGER_ACCENT_SOFT = "#F1E0E4";
 // Inter reste en corps de texte pour sa neutralité et sa lisibilité.
 const FONT_DISPLAY = "'Fraunces', serif";
 const FONT_BODY = "'Inter', sans-serif";
-// Élévation à deux couches (ombre proche nette + ombre ambiante diffuse)
-// appliquée globalement à toutes les cartes (voir la règle .sc-elevate
-// injectée dans le <style> global) — donne une profondeur discrète sans
-// alourdir le tracé des bordures.
-const SHADOW_CARD = "0 1px 2px rgba(35,26,12,0.04), 0 10px 28px -8px rgba(35,26,12,0.12)";
+// Élévation à deux couches (ombre proche nette + ombre ambiante diffuse,
+// teintée navy plutôt que neutre) appliquée globalement à toutes les
+// cartes (tout élément rounded-2xl — voir la règle injectée dans le
+// <style> global) — donne une profondeur discrète sans alourdir le tracé
+// des bordures.
+const SHADOW_CARD = "0 1px 2px rgba(15,27,51,0.05), 0 10px 28px -8px rgba(15,27,51,0.16)";
 
 /* ---------------- LOGIN ---------------- */
 function LoginScreen({ members, onCreateMember, onLogin, notify }) {
@@ -725,7 +727,7 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
         <div className="text-center mb-8">
           <div
             className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4"
-            style={{ background: `linear-gradient(155deg, ${THEME.navy}, #0A3B36)` }}
+            style={{ background: `linear-gradient(155deg, ${THEME.navy}, #0B2E24)` }}
           >
             <TrendingUp size={26} color={THEME.teal} />
           </div>
@@ -969,7 +971,7 @@ function AcceptInviteScreen({ token, invites, members, onCreateMember, onUpdateI
         <div className="text-center mb-8">
           <div
             className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4"
-            style={{ background: `linear-gradient(155deg, ${THEME.navy}, #0A3B36)` }}
+            style={{ background: `linear-gradient(155deg, ${THEME.navy}, #0B2E24)` }}
           >
             <Users size={26} color={THEME.teal} />
           </div>

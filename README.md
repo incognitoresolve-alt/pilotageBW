@@ -22,7 +22,7 @@ npm run worker:dev
 
 ## Design
 
-Palette "encre & papier" (fond ivoire chaud, cartes blanches en légère élévation, accents navy/teal/ambre/or/bourgogne) et pairing typographique Fraunces (titres, gros chiffres — serif éditorial à graisse variable) + Inter (corps de texte), volontairement à l'écart des couples Space Grotesk/Sora omniprésents dans les interfaces générées automatiquement. Tous les tokens (couleurs, ombre de carte, polices) sont centralisés dans `THEME`, `MANAGER_ACCENT` et `FONT_DISPLAY`/`FONT_BODY` en tête de `src/App.jsx` — les modifier là se répercute sur toute l'application.
+Palette "navy & laiton" façon banque privée (bleu marine très profond, laiton/or discret, bourgogne pour le responsable, sur fond crème neutre, cartes blanches en légère élévation) et pairing typographique Fraunces (titres, gros chiffres — serif éditorial à graisse variable) + Inter (corps de texte), volontairement à l'écart des couples Space Grotesk/Sora omniprésents dans les interfaces générées automatiquement. Tous les tokens (couleurs, ombre de carte, polices) sont centralisés dans `THEME`, `MANAGER_ACCENT` et `FONT_DISPLAY`/`FONT_BODY` en tête de `src/App.jsx` — les modifier là se répercute sur toute l'application.
 
 ## Backend
 
