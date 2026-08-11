@@ -282,17 +282,29 @@ function entriesBreakdown(scopedEntries) {
   return { assurance, credit, creditCount };
 }
 
+// Renvoie { value, version } — `version` sert de base à la concurrence
+// optimiste dans saveShared (voir plus bas) : un nombre à chaque fois
+// qu'une écriture réussit côté Worker (voir worker/index.js).
 async function loadShared(key, fallback, onError) {
   try {
     const r = await window.storage.get(key, true);
-    return r ? JSON.parse(r.value) : fallback;
+    return { value: r ? JSON.parse(r.value) : fallback, version: r ? r.version : 0 };
   } catch (e) {
     onError?.(e);
-    return fallback;
+    // version = undefined : saveShared n'enverra pas expectedVersion, donc
+    // pas de vérification de conflit tant qu'on n'a pas pu observer une
+    // version fiable — mieux vaut permettre l'écriture (comportement
+    // d'avant) que bloquer l'app sur un échec de chargement transitoire.
+    return { value: fallback, version: undefined };
   }
 }
-async function saveShared(key, value) {
-  await window.storage.set(key, JSON.stringify(value), true);
+// Écriture avec concurrence optimiste : si `expectedVersion` est fourni et
+// ne correspond plus à la version actuelle côté serveur (quelqu'un d'autre
+// a écrit entre-temps), le Worker refuse (409) plutôt que d'écraser
+// silencieusement ce changement — voir worker/index.js. Renvoie la nouvelle
+// version en cas de succès, à conserver pour la prochaine écriture.
+async function saveShared(key, value, expectedVersion) {
+  return window.storage.set(key, JSON.stringify(value), true, expectedVersion);
 }
 async function loadLocal(key, fallback) {
   try {
@@ -321,6 +333,11 @@ export default function App() {
   // jour le jour (nombre + montant par type) plutôt qu'en un seul chiffre
   // mensuel écrasé à chaque mise à jour — voir CreditRecordsForm.
   const [creditRecords, setCreditRecords] = useState([]); // [{id, memberId, date, creditType, nombre, montant, recordedBy, recordedAt}]
+  // Dernière version connue de chaque collection partagée (voir
+  // loadShared/saveShared) — sert de base à la détection de conflit avant
+  // chaque écriture, pour ne jamais écraser silencieusement une
+  // modification faite ailleurs entre-temps (voir README > Robustesse).
+  const [versions, setVersions] = useState({});
   const [session, setSession] = useState(null); // {id, name, email, role}
   const [tab, setTab] = useState("saisie");
   const [toast, setToast] = useState(null);
@@ -354,7 +371,7 @@ export default function App() {
       const onError = (e) => {
         loadError = e;
       };
-      const [m, e, f, h, inv, cr, lastSession] = await Promise.all([
+      const [mRes, eRes, fRes, hRes, invRes, crRes, lastSession] = await Promise.all([
         loadShared("members", [], onError),
         loadShared("entries", [], onError),
         loadShared("figures", {}, onError),
@@ -363,14 +380,28 @@ export default function App() {
         loadShared("creditRecords", [], onError),
         loadLocal("last-session", null),
       ]);
-      setMembers(m);
-      setEntries(e);
-      setFigures(f);
-      setCreditRecords(cr);
-      setDeletionHistory(h);
-      setInvites(inv);
-      if (lastSession && m.find((x) => x.id === lastSession.id)) {
-        setSession(lastSession);
+      setMembers(mRes.value);
+      setEntries(eRes.value);
+      setFigures(fRes.value);
+      setCreditRecords(crRes.value);
+      setDeletionHistory(hRes.value);
+      setInvites(invRes.value);
+      setVersions({
+        members: mRes.version,
+        entries: eRes.version,
+        figures: fRes.version,
+        deletionHistory: hRes.version,
+        invites: invRes.version,
+        creditRecords: crRes.version,
+      });
+      // On ne fait jamais confiance à l'objet stocké localement tel quel :
+      // seul son `id` sert de clé, le reste (notamment `role`) est
+      // toujours repris du membre tel qu'il existe côté serveur au moment
+      // du chargement. Sans ça, modifier son propre localStorage suffirait
+      // à s'attribuer le rôle "responsable" (voir README > Sécurité).
+      if (lastSession) {
+        const freshMember = mRes.value.find((x) => x.id === lastSession.id);
+        if (freshMember) setSession(freshMember);
       }
       setReady(true);
       if (loadError) {
@@ -394,7 +425,7 @@ export default function App() {
     const onError = (e) => {
       loadError = e;
     };
-    const [m, e, f, h, inv, cr] = await Promise.all([
+    const [mRes, eRes, fRes, hRes, invRes, crRes] = await Promise.all([
       loadShared("members", null, onError),
       loadShared("entries", null, onError),
       loadShared("figures", null, onError),
@@ -407,12 +438,20 @@ export default function App() {
       if (!silent) notify(`Actualisation impossible (${loadError.message}).`, true);
       return false;
     }
-    if (m !== null) setMembers(m);
-    if (e !== null) setEntries(e);
-    if (f !== null) setFigures(f);
-    if (h !== null) setDeletionHistory(h);
-    if (inv !== null) setInvites(inv);
-    if (cr !== null) setCreditRecords(cr);
+    if (mRes.value !== null) setMembers(mRes.value);
+    if (eRes.value !== null) setEntries(eRes.value);
+    if (fRes.value !== null) setFigures(fRes.value);
+    if (hRes.value !== null) setDeletionHistory(hRes.value);
+    if (invRes.value !== null) setInvites(invRes.value);
+    if (crRes.value !== null) setCreditRecords(crRes.value);
+    setVersions((v) => ({
+      members: mRes.version ?? v.members,
+      entries: eRes.version ?? v.entries,
+      figures: fRes.version ?? v.figures,
+      deletionHistory: hRes.version ?? v.deletionHistory,
+      invites: invRes.version ?? v.invites,
+      creditRecords: crRes.version ?? v.creditRecords,
+    }));
     setServerStatus({ ok: true, detail: null });
     if (!silent) notify("Données actualisées.");
     return true;
@@ -440,86 +479,52 @@ export default function App() {
     setRefreshing(false);
   }, [refreshShared]);
 
-  // Chaque fonction renvoie true si la sauvegarde a réussi, false sinon —
-  // les appelants doivent vérifier ce retour avant d'afficher un message
-  // de succès. En cas d'échec, on revient aussi à l'état précédent pour
-  // que l'écran ne montre jamais comme "enregistrée" une donnée qui ne
-  // l'est pas réellement côté serveur.
-  const persistMembers = async (next) => {
-    const previous = members;
-    setMembers(next);
+  // Sauvegarde générique pour toutes les collections partagées : bascule
+  // l'état local immédiatement (optimiste), écrit en ligne en précisant la
+  // dernière version connue (concurrence optimiste — voir loadShared plus
+  // haut, sauf si `strict: false`, voir ci-dessous), et revient à l'état
+  // précédent en cas d'échec pour que l'écran ne montre jamais comme
+  // "enregistrée" une donnée qui ne l'est pas réellement côté serveur.
+  // Renvoie true si la sauvegarde a réussi.
+  //
+  // Cas particulier : conflit (quelqu'un d'autre a écrit sur la même
+  // collection entre-temps) — on ne réessaie pas silencieusement en
+  // écrasant son travail, on prévient l'utilisateur et on rafraîchit en
+  // arrière-plan pour qu'un nouvel essai reparte d'une base à jour.
+  const persistCollection = async (key, next, previous, setState, { strict = true } = {}) => {
+    setState(next);
     try {
-      await saveShared("members", next);
+      const newVersion = await saveShared(key, next, strict ? versions[key] : undefined);
+      setVersions((v) => ({ ...v, [key]: newVersion }));
       setServerStatus({ ok: true, detail: null });
       return true;
     } catch (e) {
-      console.error("storage set failed", "members", e);
-      setMembers(previous);
+      console.error("storage set failed", key, e);
+      setState(previous);
       setServerStatus({ ok: false, detail: e.message });
-      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
+      if (e.conflict) {
+        notify("Ces données ont été modifiées ailleurs entre-temps — actualisation en cours, réessayez.", true);
+        refreshShared({ silent: true });
+      } else {
+        notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
+      }
       return false;
     }
   };
-  const persistEntries = async (next) => {
-    const previous = entries;
-    setEntries(next);
-    try {
-      await saveShared("entries", next);
-      setServerStatus({ ok: true, detail: null });
-      return true;
-    } catch (e) {
-      console.error("storage set failed", "entries", e);
-      setEntries(previous);
-      setServerStatus({ ok: false, detail: e.message });
-      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
-      return false;
-    }
-  };
-  const persistDeletionHistory = async (next) => {
-    const previous = deletionHistory;
-    setDeletionHistory(next);
-    try {
-      await saveShared("deletionHistory", next);
-      setServerStatus({ ok: true, detail: null });
-      return true;
-    } catch (e) {
-      console.error("storage set failed", "deletionHistory", e);
-      setDeletionHistory(previous);
-      setServerStatus({ ok: false, detail: e.message });
-      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
-      return false;
-    }
-  };
-  const persistInvites = async (next) => {
-    const previous = invites;
-    setInvites(next);
-    try {
-      await saveShared("invites", next);
-      setServerStatus({ ok: true, detail: null });
-      return true;
-    } catch (e) {
-      console.error("storage set failed", "invites", e);
-      setInvites(previous);
-      setServerStatus({ ok: false, detail: e.message });
-      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
-      return false;
-    }
-  };
-  const persistCreditRecords = async (next) => {
-    const previous = creditRecords;
-    setCreditRecords(next);
-    try {
-      await saveShared("creditRecords", next);
-      setServerStatus({ ok: true, detail: null });
-      return true;
-    } catch (e) {
-      console.error("storage set failed", "creditRecords", e);
-      setCreditRecords(previous);
-      setServerStatus({ ok: false, detail: e.message });
-      notify(`Échec de la sauvegarde en ligne (${e.message}) — vérifiez votre connexion et réessayez.`, true);
-      return false;
-    }
-  };
+  const persistMembers = (next) => persistCollection("members", next, members, setMembers);
+  const persistEntries = (next) => persistCollection("entries", next, entries, setEntries);
+  // "invites" et "deletionHistory" restent en écriture inconditionnelle
+  // (`strict: false`) : deux écritures quasi simultanées y sont courantes
+  // par construction (le responsable qui génère un lien pendant qu'une
+  // autre invitation s'active ailleurs ; deux suppressions coup sur coup
+  // par des utilisateurs différents) et sans grande conséquence en cas de
+  // perte rare (on régénère un lien, ou une ligne d'audit manque) — la
+  // détection de conflit stricte bloquerait inutilement ce cas fréquent et
+  // bénin. `members`/`entries`/`creditRecords` gardent la protection
+  // stricte : y perdre une modification concurrente est plus coûteux.
+  const persistDeletionHistory = (next) => persistCollection("deletionHistory", next, deletionHistory, setDeletionHistory, { strict: false });
+  const persistInvites = (next) => persistCollection("invites", next, invites, setInvites, { strict: false });
+  const persistCreditRecords = (next) => persistCollection("creditRecords", next, creditRecords, setCreditRecords);
   // Journalise un élément supprimé (dossier ou membre) avant sa suppression
   // effective, pour garder une trace consultable dans l'onglet Historique.
   const recordDeletion = (kind, data, actor) =>
@@ -737,6 +742,9 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
     if (result.error === "invalid_password") {
       return setError("Mot de passe incorrect.");
     }
+    if (result.error === "too_many_attempts") {
+      return setError("Trop de tentatives — réessayez dans quelques minutes.");
+    }
     if (result.ok) {
       onLogin(result.member);
       return;
@@ -766,7 +774,11 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
     const em = email.trim().toLowerCase();
     if (!em || !name.trim()) return setError("Renseignez votre nom et votre e-mail professionnel.");
     setBusy(true);
-    const valid = await verifyManagerCode(code);
+    const { valid, limited } = await verifyManagerCode(code);
+    if (limited) {
+      setBusy(false);
+      return setError("Trop de tentatives — réessayez dans quelques minutes.");
+    }
     if (!valid) {
       setBusy(false);
       return setError("Code d'accès responsable incorrect (ou connexion au serveur impossible).");

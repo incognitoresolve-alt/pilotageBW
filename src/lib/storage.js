@@ -40,18 +40,32 @@ async function get(key, shared) {
   return raw === null ? null : { value: raw };
 }
 
-async function set(key, value, shared) {
+// `expectedVersion`, si fourni, active la concurrence optimiste côté
+// Worker : la requête échoue avec un conflit (plutôt que d'écraser une
+// écriture faite ailleurs entre-temps) si la version a changé depuis la
+// dernière lecture — voir worker/index.js et App.jsx > persistCollection.
+async function set(key, value, shared, expectedVersion) {
   if (shared) {
+    const payload = typeof expectedVersion === "number" ? { value, expectedVersion } : { value };
     const res = await fetch(`${API_BASE}/${encodeURIComponent(key)}`, {
       method: "PUT",
       headers: {
         "Content-Type": "application/json",
         "X-App-Secret": APP_SECRET,
       },
-      body: JSON.stringify({ value }),
+      body: JSON.stringify(payload),
     });
+    if (res.status === 409) {
+      const body = await res.json().catch(() => ({}));
+      const err = new Error(`PUT ${key} failed: conflict`);
+      err.conflict = true;
+      err.serverValue = body.value;
+      err.serverVersion = body.version;
+      throw err;
+    }
     if (!res.ok) throw new Error(`PUT ${key} failed: ${await describeFailure(res)}`);
-    return;
+    const body = await res.json().catch(() => ({}));
+    return body.version;
   }
   window.localStorage.setItem(localKey(key), value);
 }
@@ -73,11 +87,12 @@ export async function verifyManagerCode(code) {
       },
       body: JSON.stringify({ code }),
     });
-    if (!res.ok) return false;
+    if (res.status === 429) return { valid: false, limited: true };
+    if (!res.ok) return { valid: false, limited: false };
     const body = await res.json();
-    return !!body.valid;
+    return { valid: !!body.valid, limited: false };
   } catch {
-    return false;
+    return { valid: false, limited: false };
   }
 }
 
