@@ -401,7 +401,10 @@ export default function App() {
       // à s'attribuer le rôle "responsable" (voir README > Sécurité).
       if (lastSession) {
         const freshMember = mRes.value.find((x) => x.id === lastSession.id);
-        if (freshMember) setSession(freshMember);
+        if (freshMember) {
+          setSession(freshMember);
+          setTab(freshMember.role === "responsable" ? "suivi" : "saisie");
+        }
       }
       setReady(true);
       if (loadError) {
@@ -477,6 +480,18 @@ export default function App() {
     setRefreshing(true);
     await refreshShared({ silent: false });
     setRefreshing(false);
+  }, [refreshShared]);
+
+  // "Journal" et "Suivi & objectifs" sont les deux onglets où le
+  // responsable regarde des données déclarées par d'autres (l'équipe) :
+  // sans ça, il faudrait attendre jusqu'à 30s (le cycle silencieux
+  // automatique) après l'ouverture de l'onglet pour voir une vente très
+  // récente. On déclenche donc un rafraîchissement silencieux à chaque
+  // fois qu'on y navigue, en plus des rafraîchissements automatiques
+  // existants (intervalle, retour sur l'onglet, bouton manuel).
+  const changeTab = useCallback((next) => {
+    setTab(next);
+    if (next === "journal" || next === "suivi") refreshShared({ silent: true });
   }, [refreshShared]);
 
   // Sauvegarde générique pour toutes les collections partagées : bascule
@@ -556,6 +571,10 @@ export default function App() {
 
   const login = async (member) => {
     setSession(member);
+    // Un responsable a rarement ses propres ventes à déclarer : l'atterrir
+    // sur "Suivi & objectifs" (vue d'ensemble de l'équipe) plutôt que sur
+    // "Ma saisie" lui évite un clic systématique à chaque connexion.
+    setTab(member.role === "responsable" ? "suivi" : "saisie");
     await saveLocal("last-session", member);
   };
   const logout = async () => {
@@ -658,7 +677,7 @@ export default function App() {
           creditRecords={creditRecords}
           setCreditRecords={persistCreditRecords}
           tab={tab}
-          setTab={setTab}
+          setTab={changeTab}
           mKey={mKey}
           notify={notify}
           onRefresh={manualRefresh}
@@ -1163,6 +1182,31 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
   const accent = isManager ? MANAGER_ACCENT : THEME.teal;
   const accentSoft = isManager ? MANAGER_ACCENT_SOFT : THEME.tealSoft;
 
+  // Résumé "coup d'œil" pour le responsable : agrège la progression de
+  // toute l'équipe sur le mois en cours, visible dans un bandeau persistant
+  // quel que soit l'onglet actif (pas seulement dans "Suivi & objectifs").
+  // Réutilise les mêmes helpers (computeMemberMetrics/memberPaceStatus) que
+  // SuiviTab pour rester rigoureusement cohérent avec le détail par
+  // collaborateur.
+  const teamOverview = useMemo(() => {
+    if (!isManager) return null;
+    const collaborators = members.filter((m) => m.role === "collaborateur");
+    if (collaborators.length === 0) return null;
+    const monthFigures = figures[mKey] || {};
+    let assuranceRealise = 0, assuranceObjectif = 0, creditTotal = 0, creditObjectif = 0, montantRealise = 0, lateCount = 0;
+    collaborators.forEach((m) => {
+      const metrics = computeMemberMetrics(m, entries, monthFigures, creditRecords, mKey);
+      assuranceRealise += metrics.assuranceRealise;
+      assuranceObjectif += metrics.objA;
+      creditTotal += metrics.creditTotal;
+      creditObjectif += metrics.objC;
+      montantRealise += metrics.montantRealise;
+      if (memberPaceStatus(metrics, true).key === "retard") lateCount += 1;
+    });
+    return { assuranceRealise, assuranceObjectif, creditTotal, creditObjectif, montantRealise, lateCount };
+  }, [isManager, members, entries, figures, creditRecords, mKey]);
+  const pendingInvitesCount = useMemo(() => invites.filter((i) => !i.used).length, [invites]);
+
   return (
     <div>
       <header
@@ -1217,6 +1261,28 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
         </div>
       </header>
 
+      {teamOverview && (
+        <div
+          className="px-5 py-2.5 flex items-center gap-x-5 gap-y-1 flex-wrap text-xs max-w-5xl mx-auto"
+          style={{ color: THEME.navySoft }}
+        >
+          {teamOverview.lateCount > 0 && (
+            <span className="font-semibold flex items-center gap-1" style={{ color: THEME.red }}>
+              <AlertCircle size={12} /> {teamOverview.lateCount} en retard
+            </span>
+          )}
+          <span>
+            <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.assuranceRealise}</span> assur. / obj. {teamOverview.assuranceObjectif}
+          </span>
+          <span>
+            <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.creditTotal}</span> créd. / obj. {teamOverview.creditObjectif}
+          </span>
+          <span>
+            <span className="font-semibold" style={{ color: THEME.navy }}>{formatEUR(teamOverview.montantRealise)}</span> vendus ce mois
+          </span>
+        </div>
+      )}
+
       <nav className="flex gap-1 px-5 pt-4 max-w-5xl mx-auto overflow-x-auto sc-scroll-x">
         <TabButton active={tab === "saisie"} onClick={() => setTab("saisie")} icon={ClipboardList} accent={accent}>
           Ma saisie
@@ -1224,14 +1290,14 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
         <TabButton active={tab === "journal"} onClick={() => setTab("journal")} icon={Calendar} accent={accent}>
           Journal
         </TabButton>
-        <TabButton active={tab === "suivi"} onClick={() => setTab("suivi")} icon={Award} accent={accent}>
+        <TabButton active={tab === "suivi"} onClick={() => setTab("suivi")} icon={Award} accent={accent} badge={teamOverview?.lateCount || 0}>
           Suivi & objectifs
         </TabButton>
         <TabButton active={tab === "classement"} onClick={() => setTab("classement")} icon={Trophy} accent={accent}>
           Classement
         </TabButton>
         {isManager && (
-          <TabButton active={tab === "equipe"} onClick={() => setTab("equipe")} icon={Users} accent={accent}>
+          <TabButton active={tab === "equipe"} onClick={() => setTab("equipe")} icon={Users} accent={accent} badge={pendingInvitesCount}>
             Équipe
           </TabButton>
         )}
@@ -1274,6 +1340,7 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
             figures={figures}
             creditRecords={creditRecords}
             setCreditRecords={setCreditRecords}
+            setTab={setTab}
             mKey={mKey}
             notify={notify}
             isManager={isManager}
@@ -1301,7 +1368,7 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
   );
 }
 
-function TabButton({ active, onClick, icon: Icon, children, accent = THEME.teal }) {
+function TabButton({ active, onClick, icon: Icon, children, accent = THEME.teal, badge = 0 }) {
   const [hover, setHover] = useState(false);
   return (
     <button
@@ -1316,6 +1383,14 @@ function TabButton({ active, onClick, icon: Icon, children, accent = THEME.teal 
       }}
     >
       <Icon size={15} /> {children}
+      {badge > 0 && (
+        <span
+          className="text-[10px] font-semibold leading-none px-1.5 py-0.5 rounded-full"
+          style={{ background: THEME.red, color: "#fff" }}
+        >
+          {badge}
+        </span>
+      )}
     </button>
   );
 }
@@ -1986,7 +2061,7 @@ function StatCard({ icon: Icon, label, value, color }) {
 }
 
 /* ---------------- SUIVI TAB ---------------- */
-function SuiviTab({ session, members, setMembers, entries, figures, creditRecords, setCreditRecords, mKey, notify, isManager }) {
+function SuiviTab({ session, members, setMembers, entries, figures, creditRecords, setCreditRecords, mKey, notify, isManager, setTab }) {
   const collaborators = members.filter((m) => m.role === "collaborateur");
   const [viewMonth, setViewMonth] = useState(mKey);
   const isCurrentMonth = viewMonth === mKey;
@@ -2451,6 +2526,8 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
               saveEdit={saveEdit}
               saveCreditRecords={saveCreditRecords}
               saving={saving}
+              notify={notify}
+              setTab={setTab}
             />
           )
         )
@@ -2511,6 +2588,87 @@ function StatusBadge({ status }) {
   );
 }
 
+// Réinitialisation du mot de passe d'un collaborateur — bouton + prompt
+// inline demandant le code responsable, factorisé pour être utilisé aussi
+// bien depuis "Équipe" (liste complète) que depuis la carte détaillée d'un
+// collaborateur dans "Suivi & objectifs" (action rapide sans changer
+// d'onglet). `compact` ajuste juste le libellé du bouton pour s'intégrer
+// à un en-tête de carte plutôt qu'à une ligne de liste.
+function ResetPasswordControl({ member, notify, compact = false }) {
+  const [armed, setArmed] = useState(false);
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const start = () => {
+    setArmed(true);
+    setCode("");
+    setError("");
+  };
+  const cancel = () => {
+    setArmed(false);
+    setCode("");
+    setError("");
+  };
+  const confirm = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await resetMemberPassword(member.id, code);
+      notify(`Mot de passe réinitialisé — ${member.name} pourra en créer un nouveau à sa prochaine connexion.`);
+      cancel();
+    } catch {
+      setError("Code d'accès responsable incorrect (ou échec réseau).");
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => (armed ? cancel() : start())}
+        className={compact ? "flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg flex-shrink-0" : "p-2 rounded-md flex-shrink-0"}
+        style={compact ? { background: armed ? MANAGER_ACCENT_SOFT : THEME.bg, color: armed ? MANAGER_ACCENT : THEME.navySoft } : {}}
+        aria-label="Réinitialiser le mot de passe"
+        title="Réinitialiser le mot de passe"
+      >
+        <KeyRound size={compact ? 13 : 14} style={{ color: compact ? undefined : (armed ? MANAGER_ACCENT : THEME.navySoft) }} />
+        {compact && "Mot de passe"}
+      </button>
+      {armed && (
+        <div className="pt-2 flex items-center gap-2 flex-wrap">
+          <input
+            type="password"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="Code d'accès responsable"
+            className="flex-1 min-w-[10rem] px-2.5 py-1.5 rounded-lg text-xs"
+            style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
+          />
+          <button
+            type="button"
+            onClick={confirm}
+            disabled={busy || !code}
+            className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-60"
+            style={{ background: MANAGER_ACCENT }}
+          >
+            Réinitialiser
+          </button>
+          <button type="button" onClick={cancel} className="px-2 py-1.5 rounded-lg text-xs" style={{ color: THEME.navySoft }}>
+            Annuler
+          </button>
+          {error && (
+            <div className="w-full text-xs flex items-center gap-1" style={{ color: THEME.red }}>
+              <AlertCircle size={12} /> {error}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Carte détaillée d'un collaborateur (objectifs, graphique, saisie des
 // crédits) — un seul rendu à la fois côté responsable (celui sélectionné
 // dans la vue d'ensemble), toujours affiché directement côté collaborateur
@@ -2519,30 +2677,72 @@ function MemberDetailCard({
   member, session, isManager, viewMonth, isCurrentMonth, entries, monthFigures, creditRecords,
   editingId, setEditing, objDraft, setObjDraft, objByTypeDraft, setObjByTypeDraft,
   creditDate, creditDraft, setCreditDraft, startEdit, changeCreditDate, saveEdit, saveCreditRecords, saving,
+  notify, setTab,
 }) {
   const isEditing = editingId === member.id;
+  const metrics = computeMemberMetrics(member, entries, monthFigures, creditRecords, viewMonth);
   const {
     objA, objC, objM, declared, todayForMember, montantRealise, resteM,
     assuranceRealiseParType, creditRealiseParType, creditCountParType,
     creditTotal, creditCountTotal, resteC, assuranceRealise, resteA,
     objectifsAssuranceParType, objectifsCreditParType, hasProduitObjectifs,
-  } = computeMemberMetrics(member, entries, monthFigures, creditRecords, viewMonth);
+  } = metrics;
+  const status = memberPaceStatus(metrics, isCurrentMonth);
+
+  // Message de relance pré-rempli (copié dans le presse-papier, à coller où
+  // le responsable veut — e-mail, WhatsApp, SMS…) : reprend ce qu'il reste
+  // à faire pour atteindre l'objectif du mois, sans jamais l'envoyer
+  // automatiquement.
+  const copyReminder = async () => {
+    const manques = [];
+    if (resteA > 0) manques.push(`${resteA} assurance${resteA > 1 ? "s" : ""}`);
+    if (resteC > 0) manques.push(`${resteC} crédit${resteC > 1 ? "s" : ""}`);
+    const detail = manques.length > 0 ? manques.join(" et ") : "votre objectif";
+    const message = `Bonjour ${member.name.split(" ")[0]}, petit rappel : il vous reste ${detail} à réaliser pour atteindre l'objectif de ce mois (${daysLeftInMonth()} jour${daysLeftInMonth() > 1 ? "s" : ""} restant${daysLeftInMonth() > 1 ? "s" : ""}). N'hésitez pas si vous avez besoin d'aide !`;
+    try {
+      await navigator.clipboard.writeText(message);
+      notify?.("Message de relance copié dans le presse-papier.");
+    } catch {
+      notify?.("Impossible de copier le message — copiez-le manuellement.", true);
+    }
+  };
 
   return (
     <div className="rounded-2xl overflow-hidden" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
-      <div className="px-5 py-4 flex items-center justify-between" style={{ borderBottom: `1px solid ${THEME.line}` }}>
+      <div className="px-5 py-4 flex items-center justify-between gap-3 flex-wrap" style={{ borderBottom: `1px solid ${THEME.line}` }}>
         <div>
           <div className="font-semibold text-sm">{member.name}</div>
           <div className="text-xs" style={{ color: THEME.navySoft }}>{member.email}</div>
         </div>
         {isManager && !isEditing && (
-          <button
-            onClick={() => startEdit(member)}
-            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-opacity hover:opacity-90 flex-shrink-0"
-            style={{ background: MANAGER_ACCENT, color: "#fff" }}
-          >
-            <Pencil size={13} /> Mettre à jour
-          </button>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {isCurrentMonth && status.key === "retard" && (
+              <button
+                onClick={copyReminder}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg flex-shrink-0"
+                style={{ background: THEME.redSoft, color: THEME.red }}
+                title="Copier un message de relance pré-rempli"
+              >
+                <Copy size={13} /> Relancer
+              </button>
+            )}
+            <button
+              onClick={() => setTab?.("journal")}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg flex-shrink-0"
+              style={{ background: THEME.bg, color: THEME.navySoft }}
+              title="Voir le journal de ce collaborateur"
+            >
+              <Calendar size={13} /> Journal
+            </button>
+            <ResetPasswordControl member={member} notify={notify} compact />
+            <button
+              onClick={() => startEdit(member)}
+              className="flex items-center gap-1.5 text-xs font-semibold px-3 py-2 rounded-lg transition-opacity hover:opacity-90 flex-shrink-0"
+              style={{ background: MANAGER_ACCENT, color: "#fff" }}
+            >
+              <Pencil size={13} /> Mettre à jour
+            </button>
+          </div>
         )}
       </div>
 
@@ -3241,34 +3441,7 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteError, setInviteError] = useState("");
   const [copiedId, setCopiedId] = useState(null);
-  const [resettingId, setResettingId] = useState(null);
-  const [resetCode, setResetCode] = useState("");
-  const [resetBusy, setResetBusy] = useState(false);
-  const [resetError, setResetError] = useState("");
   const [inviteBusy, setInviteBusy] = useState(false);
-
-  const startReset = (id) => {
-    setResettingId(id);
-    setResetCode("");
-    setResetError("");
-  };
-  const cancelReset = () => {
-    setResettingId(null);
-    setResetCode("");
-    setResetError("");
-  };
-  const confirmReset = async (member) => {
-    setResetBusy(true);
-    setResetError("");
-    try {
-      await resetMemberPassword(member.id, resetCode);
-      notify(`Mot de passe réinitialisé — ${member.name} pourra en créer un nouveau à sa prochaine connexion.`);
-      cancelReset();
-    } catch {
-      setResetError("Code d'accès responsable incorrect (ou échec réseau).");
-    }
-    setResetBusy(false);
-  };
 
   const removeMember = async (id) => {
     const member = members.find((m) => m.id === id);
@@ -3422,8 +3595,8 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
         ) : (
           <div className="space-y-2">
             {collaborators.map((m) => (
-              <div key={m.id} className="rounded-lg" style={{ background: THEME.bg }}>
-                <div className="flex items-center justify-between px-3 py-2.5 text-sm gap-2 flex-wrap">
+              <div key={m.id} className="rounded-lg px-3 py-2.5" style={{ background: THEME.bg }}>
+                <div className="flex items-center justify-between text-sm gap-2 flex-wrap">
                   <div>
                     <div className="font-medium">{m.name}</div>
                     <div className="text-xs" style={{ color: THEME.navySoft }}>{m.email}</div>
@@ -3432,47 +3605,10 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
                     <span className="text-xs hidden md:inline" style={{ color: THEME.navySoft }}>
                       Obj. {m.objectifAssurance ?? 5} assur. / {m.objectifCredit ?? 5} créd. / {formatEUR(m.objectifMontant ?? 5000)}
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => (resettingId === m.id ? cancelReset() : startReset(m.id))}
-                      className="p-2 rounded-md flex-shrink-0"
-                      aria-label="Réinitialiser le mot de passe"
-                      title="Réinitialiser le mot de passe"
-                    >
-                      <KeyRound size={14} style={{ color: resettingId === m.id ? MANAGER_ACCENT : THEME.navySoft }} />
-                    </button>
+                    <ResetPasswordControl member={m} notify={notify} />
                     <ConfirmActionButton onConfirm={() => removeMember(m.id)} label="Retirer" />
                   </div>
                 </div>
-                {resettingId === m.id && (
-                  <div className="px-3 pb-3 flex items-center gap-2 flex-wrap" style={{ borderTop: `1px solid ${THEME.line}` }}>
-                    <input
-                      type="password"
-                      value={resetCode}
-                      onChange={(e) => setResetCode(e.target.value)}
-                      placeholder="Code d'accès responsable"
-                      className="flex-1 min-w-[10rem] px-2.5 py-1.5 mt-3 rounded-lg text-xs"
-                      style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => confirmReset(m)}
-                      disabled={resetBusy || !resetCode}
-                      className="px-2.5 py-1.5 mt-3 rounded-lg text-xs font-semibold text-white disabled:opacity-60"
-                      style={{ background: MANAGER_ACCENT }}
-                    >
-                      Réinitialiser
-                    </button>
-                    <button type="button" onClick={cancelReset} className="px-2 py-1.5 mt-3 rounded-lg text-xs" style={{ color: THEME.navySoft }}>
-                      Annuler
-                    </button>
-                    {resetError && (
-                      <div className="w-full text-xs flex items-center gap-1" style={{ color: THEME.red }}>
-                        <AlertCircle size={12} /> {resetError}
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             ))}
           </div>

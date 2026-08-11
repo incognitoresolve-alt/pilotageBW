@@ -114,7 +114,17 @@ Le badge de statut compare, pour le mois en cours, la progression réelle de cha
 - **Aucun objectif** (gris) — aucun objectif n'est fixé pour ce collaborateur (rien à évaluer) ;
 - pour un mois archivé (déjà clos), le badge n'affiche pas de statut de rythme.
 
-Un compteur en tête de carte ("X en retard · Y à jour · Z sans objectif") donne l'état de toute l'équipe en un coup d'œil, sans avoir à ouvrir chaque profil. Par défaut, le premier collaborateur en retard est présélectionné (à défaut, le premier de la liste) — le plus souvent la personne qu'un responsable veut regarder en premier.
+Un compteur en tête de carte ("X en retard · Y à jour · Z sans objectif") donne l'état de toute l'équipe en un coup d'œil, sans avoir à ouvrir chaque profil. Par défaut, le premier collaborateur en retard est présélectionné (à défaut, le premier de la liste) — le plus souvent la personne qu'un responsable veut regarder en premier. La liste (et le menu déroulant) trient toujours les retardataires en premier.
+
+## Ergonomie responsable
+
+Plusieurs raccourcis réduisent le nombre de clics/onglets pour les tâches qu'un responsable fait le plus souvent :
+
+- **Écran d'accueil adapté** — un responsable atterrit directement sur "Suivi & objectifs" à la connexion (au lieu de "Ma saisie", pensé pour un collaborateur).
+- **Badges de notification** sur les onglets — un nombre sur "Suivi & objectifs" indique le nombre de collaborateurs en retard, un nombre sur "Équipe" indique les invitations en attente, visibles sans avoir à cliquer.
+- **Bandeau "coup d'œil"** — un résumé compact (assurances/crédits/montant réalisés vs objectif global, nombre de retardataires) reste visible sous l'en-tête quel que soit l'onglet actif.
+- **Actions rapides sur la carte collaborateur** (vue d'ensemble) — réinitialiser le mot de passe ou ouvrir le Journal de la personne sélectionnée sans changer d'onglet. Pour un collaborateur en retard, un bouton **"Relancer"** copie dans le presse-papier un message pré-rempli résumant ce qu'il reste à réaliser (jamais envoyé automatiquement — c'est au responsable de le coller où il veut : e-mail, WhatsApp, SMS…).
+- La navigation vers "Journal" ou "Suivi & objectifs" déclenche systématiquement un rafraîchissement silencieux des données, pour ne pas dépendre uniquement du cycle automatique de 30 secondes en arrivant sur ces onglets.
 
 ## Classement
 
