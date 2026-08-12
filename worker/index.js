@@ -228,7 +228,9 @@ export default {
           return jsonResponse({ error: "invalid_input" }, 400);
         }
         const secrets = await loadSecrets(env);
-        if (secrets[memberId]) {
+        const isClaim = !secrets[memberId];
+        const claimBucket = `claim:${memberId}`;
+        if (!isClaim) {
           const { ok, limited } = await checkManagerCode(env, request, body.managerCode);
           if (limited) return tooManyAttempts();
           if (!ok) return jsonResponse({ error: "manager_code_required" }, 403);
@@ -238,8 +240,12 @@ export default {
           // connaît le memberId peut le revendiquer sans code responsable
           // — c'est le fonctionnement voulu, mais on limite quand même le
           // rythme des tentatives pour ne pas laisser un script "courir"
-          // après les comptes fraîchement réinitialisés.
-          const claimBucket = `claim:${memberId}`;
+          // après les comptes fraîchement réinitialisés. Le compteur est
+          // remis à zéro dès qu'une revendication réussit (voir plus bas) :
+          // un cycle légitime réinitialisation-par-le-responsable → nouvelle
+          // revendication ne s'accumule donc jamais d'une fois sur l'autre —
+          // seuls des essais rapprochés ET infructueux sur la MÊME fenêtre
+          // peuvent épuiser la limite.
           if (await isRateLimited(env, claimBucket, 5)) return tooManyAttempts();
           await recordFailedAttempt(env, claimBucket);
         }
@@ -247,6 +253,7 @@ export default {
         const hash = await hashPassword(password, salt);
         secrets[memberId] = { salt, hash, iterations: PBKDF2_ITERATIONS_CURRENT, updatedAt: new Date().toISOString() };
         await saveSecrets(env, secrets);
+        if (isClaim) await clearRateLimit(env, claimBucket);
         return new Response(null, { status: 204 });
       }
 

@@ -780,8 +780,12 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
     try {
       await setMemberPassword(claimMember.id, newPassword);
       onLogin(claimMember);
-    } catch {
-      setError("Impossible d'enregistrer le mot de passe — réessayez.");
+    } catch (e) {
+      setError(
+        e.message === "too_many_attempts"
+          ? "Trop de tentatives — réessayez dans quelques minutes."
+          : "Impossible d'enregistrer le mot de passe — réessayez."
+      );
     }
     setBusy(false);
   };
