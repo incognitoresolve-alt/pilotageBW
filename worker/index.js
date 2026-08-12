@@ -77,15 +77,19 @@ async function checkManagerCode(env, request, providedCode) {
 //     par le responsable) ; POST /api/reset-password supprime simplement le
 //     secret existant, sans jamais toucher aux données du membre (ventes,
 //     objectifs, crédits financés) : rien n'est perdu.
-// Nombre d'itérations utilisé pour tout NOUVEAU hash (création de mot de
-// passe ou changement). Les hash existants restent vérifiables avec le
-// nombre d'itérations enregistré à l'époque (voir `secret.iterations` ci-
-// dessous) : on ne casse jamais un mot de passe déjà en place en relevant
-// cette valeur, chaque mot de passe est simplement "mis à niveau" la
-// prochaine fois qu'il est défini/changé.
-const PBKDF2_ITERATIONS_CURRENT = 300000;
+// ⚠️ Le runtime Cloudflare Workers plafonne PBKDF2 à 100 000 itérations
+// (crypto.subtle.deriveBits refuse tout nombre supérieur — confirmé en
+// production : "Pbkdf2 failed: iteration counts above 100000 are not
+// supported"). L'émulation locale (wrangler dev / Miniflare) n'applique
+// PAS cette limite, donc une valeur trop haute passe les tests locaux mais
+// casse en production — ne jamais dépasser 100 000 ici sans revérifier
+// contre le déploiement réel, pas seulement `wrangler dev`.
+const PBKDF2_ITERATIONS_CURRENT = 100000;
 // Valeur utilisée avant l'introduction de `secret.iterations` — sert de
-// repli pour les hash existants qui n'ont pas ce champ.
+// repli pour les hash existants qui n'ont pas ce champ. Identique à
+// PBKDF2_ITERATIONS_CURRENT pour l'instant (voir avertissement ci-dessus),
+// gardée séparée pour permettre une vraie hausse si Cloudflare relève un
+// jour cette limite.
 const PBKDF2_ITERATIONS_LEGACY = 100000;
 
 function toHex(bytes) {
