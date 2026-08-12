@@ -2410,7 +2410,11 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
       )}
 
       {isManager && collaborators.length > 0 && (
-        <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+        // Pendant l'édition d'un collaborateur (isEditing), cette section se
+        // condense (moins de padding, description/recherche/liste masquées,
+        // seul le sélecteur reste) pour laisser un maximum d'espace à la
+        // zone de saisie ci-dessous.
+        <div className={editing ? "rounded-2xl p-3" : "rounded-2xl p-5"} style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
           <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
             <h2 className="text-sm font-semibold">
               Vue d'ensemble — {collaborators.length} collaborateur{collaborators.length > 1 ? "s" : ""}
@@ -2435,23 +2439,27 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
               </div>
             )}
           </div>
-          <p className="text-xs mb-3" style={{ color: THEME.navySoft }}>
-            Choisissez un collaborateur pour afficher son détail (objectifs, graphique, saisie des crédits) — la liste reste lisible même avec une grande équipe.
-          </p>
-          <div className="flex flex-col sm:flex-row gap-2 mb-3">
-            <input
-              value={memberSearch}
-              onChange={(e) => setMemberSearch(e.target.value)}
-              placeholder="Rechercher un nom ou un e-mail…"
-              aria-label="Rechercher un collaborateur"
-              className="flex-1 px-3 py-2 rounded-lg text-sm"
-              style={{ border: `1px solid ${THEME.line}` }}
-            />
+          {!editing && (
+            <p className="text-xs mb-3" style={{ color: THEME.navySoft }}>
+              Choisissez un collaborateur pour afficher son détail (objectifs, graphique, saisie des crédits) — la liste reste lisible même avec une grande équipe.
+            </p>
+          )}
+          <div className={`flex flex-col sm:flex-row gap-2 ${editing ? "mt-2" : "mb-3"}`}>
+            {!editing && (
+              <input
+                value={memberSearch}
+                onChange={(e) => setMemberSearch(e.target.value)}
+                placeholder="Rechercher un nom ou un e-mail…"
+                aria-label="Rechercher un collaborateur"
+                className="flex-1 px-3 py-2 rounded-lg text-sm"
+                style={{ border: `1px solid ${THEME.line}` }}
+              />
+            )}
             <select
               value={selectedMemberId || ""}
               onChange={(e) => setSelectedMemberId(e.target.value)}
               aria-label="Choisir un collaborateur"
-              className="px-3 py-2 rounded-lg text-sm sm:w-64 flex-shrink-0"
+              className={`px-3 py-2 rounded-lg text-sm flex-shrink-0 ${editing ? "w-full" : "sm:w-64"}`}
               style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
             >
               <option value="" disabled>Choisir un collaborateur</option>
@@ -2463,34 +2471,36 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
               ))}
             </select>
           </div>
-          {filteredSummaries.length === 0 ? (
-            <p className="text-sm text-center py-4" style={{ color: THEME.navySoft }}>
-              Aucun collaborateur ne correspond à la recherche.
-            </p>
-          ) : (
-            <div className="space-y-1.5 max-h-96 overflow-y-auto pr-0.5">
-              {filteredSummaries.map((s) => {
-                const active = s.member.id === selectedMemberId;
-                return (
-                  <button
-                    key={s.member.id}
-                    type="button"
-                    onClick={() => setSelectedMemberId(s.member.id)}
-                    className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg text-sm text-left transition-colors"
-                    style={{
-                      background: active ? MANAGER_ACCENT_SOFT : THEME.bg,
-                      border: active ? `1px solid ${MANAGER_ACCENT}` : "1px solid transparent",
-                    }}
-                  >
-                    <div className="min-w-0">
-                      <div className="font-medium truncate">{s.member.name}</div>
-                      <div className="text-xs truncate" style={{ color: THEME.navySoft }}>{s.member.email}</div>
-                    </div>
-                    <StatusBadge status={s.status} />
-                  </button>
-                );
-              })}
-            </div>
+          {!editing && (
+            filteredSummaries.length === 0 ? (
+              <p className="text-sm text-center py-4" style={{ color: THEME.navySoft }}>
+                Aucun collaborateur ne correspond à la recherche.
+              </p>
+            ) : (
+              <div className="space-y-1.5 max-h-96 overflow-y-auto pr-0.5">
+                {filteredSummaries.map((s) => {
+                  const active = s.member.id === selectedMemberId;
+                  return (
+                    <button
+                      key={s.member.id}
+                      type="button"
+                      onClick={() => setSelectedMemberId(s.member.id)}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg text-sm text-left transition-colors"
+                      style={{
+                        background: THEME.bg,
+                        borderLeft: active ? `3px solid ${MANAGER_ACCENT}` : "3px solid transparent",
+                      }}
+                    >
+                      <div className="min-w-0">
+                        <div className="font-medium truncate">{s.member.name}</div>
+                        <div className="text-xs truncate" style={{ color: THEME.navySoft }}>{s.member.email}</div>
+                      </div>
+                      <StatusBadge status={s.status} />
+                    </button>
+                  );
+                })}
+              </div>
+            )
           )}
         </div>
       )}
@@ -2689,6 +2699,13 @@ function MemberDetailCard({
   } = metrics;
   const status = memberPaceStatus(metrics, isCurrentMonth);
 
+  // Accordéon des produits crédit (saisie du jour) : un seul type de
+  // crédit dévoile ses champs à la fois, pour éviter d'afficher les 6
+  // produits en même temps. Repli des "objectifs par produit" (optionnels,
+  // moins consultés) par défaut, dépliés via un bouton.
+  const [expandedCreditType, setExpandedCreditType] = useState(null);
+  const [showProduitObjectifs, setShowProduitObjectifs] = useState(false);
+
   // Message de relance pré-rempli (copié dans le presse-papier, à coller où
   // le responsable veut — e-mail, WhatsApp, SMS…) : reprend ce qu'il reste
   // à faire pour atteindre l'objectif du mois, sans jamais l'envoyer
@@ -2802,19 +2819,23 @@ function MemberDetailCard({
         </div>
       )}
 
-      <div className="px-5 pb-5">
-        <PerformanceChart
-          entries={entries}
-          lines={
-            isManager
-              ? [
-                  { key: "self", personId: member.id, label: member.name, color: THEME.yellow },
-                  { key: "team", personId: null, label: "Équipe DirectSales", color: THEME.navy },
-                ]
-              : [{ key: "self", personId: member.id, label: member.name, color: THEME.yellow }]
-          }
-        />
-      </div>
+      {/* Masqué pendant l'édition : libère de l'espace pour la saisie des
+          crédits/objectifs, le graphique n'apportant rien à ce moment-là. */}
+      {!isEditing && (
+        <div className="px-5 pb-5">
+          <PerformanceChart
+            entries={entries}
+            lines={
+              isManager
+                ? [
+                    { key: "self", personId: member.id, label: member.name, color: THEME.yellow },
+                    { key: "team", personId: null, label: "Équipe DirectSales", color: THEME.navy },
+                  ]
+                : [{ key: "self", personId: member.id, label: member.name, color: THEME.yellow }]
+            }
+          />
+        </div>
+      )}
 
       {isEditing && (
         <div className="px-5 pb-5">
@@ -2838,27 +2859,83 @@ function MemberDetailCard({
                 style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
               />
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
-              {CREDIT_TYPES.map((ct) =>
-                CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? (
-                  <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
-                    <div className="text-xs font-semibold mb-2">{ct}</div>
-                    <div className="space-y-2">
-                      {CONTRACT_MODES.map((mode) => (
-                        <div key={mode}>
-                          <div className="text-[10px] font-medium mb-1" style={{ color: THEME.navySoft }}>{mode}</div>
+            {/* Accordéon : un seul produit dévoile ses champs à la fois
+                (bouton d'en-tête), pour éviter les 6 blocs ouverts en même
+                temps. Un point rempli sur l'en-tête indique un produit déjà
+                saisi pour ce jour, visible même replié. */}
+            <div className="space-y-1.5 mb-3">
+              {CREDIT_TYPES.map((ct) => {
+                const isOpen = expandedCreditType === ct;
+                const filled = CONTRACT_MODE_CREDIT_TYPES.includes(ct)
+                  ? CONTRACT_MODES.some((mode) => (creditDraft[ct][mode].nombre || 0) > 0 || (creditDraft[ct][mode].montant || 0) > 0)
+                  : (creditDraft[ct].nombre || 0) > 0 || (creditDraft[ct].montant || 0) > 0;
+                return (
+                  <div key={ct} className="rounded-lg overflow-hidden" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedCreditType((c) => (c === ct ? null : ct))}
+                      className="w-full flex items-center justify-between gap-2 px-3 py-2 text-xs font-semibold"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        {filled && <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: THEME.amber }} />}
+                        {ct}
+                      </span>
+                      <ChevronRight size={13} style={{ color: THEME.navySoft, transform: isOpen ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+                    </button>
+                    {isOpen && (
+                      <div className="px-3 pb-3">
+                        {CONTRACT_MODE_CREDIT_TYPES.includes(ct) ? (
+                          <div className="space-y-2">
+                            {CONTRACT_MODES.map((mode) => (
+                              <div key={mode}>
+                                <div className="text-[10px] font-medium mb-1" style={{ color: THEME.navySoft }}>{mode}</div>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <label className="block">
+                                    <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Nombre</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={creditDraft[ct][mode].nombre}
+                                      onChange={(e) =>
+                                        setCreditDraft((d) => ({
+                                          ...d,
+                                          [ct]: { ...d[ct], [mode]: { ...d[ct][mode], nombre: Number(e.target.value) || 0 } },
+                                        }))
+                                      }
+                                      className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
+                                      style={{ border: `1px solid ${THEME.line}` }}
+                                    />
+                                  </label>
+                                  <label className="block">
+                                    <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Montant (€)</span>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      value={creditDraft[ct][mode].montant}
+                                      onChange={(e) =>
+                                        setCreditDraft((d) => ({
+                                          ...d,
+                                          [ct]: { ...d[ct], [mode]: { ...d[ct][mode], montant: Number(e.target.value) || 0 } },
+                                        }))
+                                      }
+                                      className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
+                                      style={{ border: `1px solid ${THEME.line}` }}
+                                    />
+                                  </label>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
                           <div className="grid grid-cols-2 gap-2">
                             <label className="block">
                               <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Nombre</span>
                               <input
                                 type="number"
                                 min="0"
-                                value={creditDraft[ct][mode].nombre}
+                                value={creditDraft[ct].nombre}
                                 onChange={(e) =>
-                                  setCreditDraft((d) => ({
-                                    ...d,
-                                    [ct]: { ...d[ct], [mode]: { ...d[ct][mode], nombre: Number(e.target.value) || 0 } },
-                                  }))
+                                  setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], nombre: Number(e.target.value) || 0 } }))
                                 }
                                 className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
                                 style={{ border: `1px solid ${THEME.line}` }}
@@ -2869,56 +2946,21 @@ function MemberDetailCard({
                               <input
                                 type="number"
                                 min="0"
-                                value={creditDraft[ct][mode].montant}
+                                value={creditDraft[ct].montant}
                                 onChange={(e) =>
-                                  setCreditDraft((d) => ({
-                                    ...d,
-                                    [ct]: { ...d[ct], [mode]: { ...d[ct][mode], montant: Number(e.target.value) || 0 } },
-                                  }))
+                                  setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], montant: Number(e.target.value) || 0 } }))
                                 }
                                 className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
                                 style={{ border: `1px solid ${THEME.line}` }}
                               />
                             </label>
                           </div>
-                        </div>
-                      ))}
-                    </div>
+                        )}
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div key={ct} className="rounded-lg p-2.5" style={{ background: THEME.card }}>
-                    <div className="text-xs font-semibold mb-1.5">{ct}</div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="block">
-                        <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Nombre</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={creditDraft[ct].nombre}
-                          onChange={(e) =>
-                            setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], nombre: Number(e.target.value) || 0 } }))
-                          }
-                          className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
-                          style={{ border: `1px solid ${THEME.line}` }}
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="block text-[10px] mb-1" style={{ color: THEME.navySoft }}>Montant (€)</span>
-                        <input
-                          type="number"
-                          min="0"
-                          value={creditDraft[ct].montant}
-                          onChange={(e) =>
-                            setCreditDraft((d) => ({ ...d, [ct]: { ...d[ct], montant: Number(e.target.value) || 0 } }))
-                          }
-                          className="w-full px-2 py-1.5 rounded-lg text-sm text-center"
-                          style={{ border: `1px solid ${THEME.line}` }}
-                        />
-                      </label>
-                    </div>
-                  </div>
-                )
-              )}
+                );
+              })}
             </div>
             <button
               onClick={() => saveCreditRecords(member)}
@@ -2931,43 +2973,53 @@ function MemberDetailCard({
             </button>
           </div>
 
-          <div className="text-xs font-medium mb-2" style={{ color: THEME.navySoft }}>
-            Objectifs par produit (optionnel)
-          </div>
-          <div className="grid grid-cols-3 gap-2 mb-2">
-            {ASSURANCE_TYPES.map((at) => (
-              <label key={at} className="block">
-                <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{at} (nb)</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={objByTypeDraft.assurance[at] || 0}
-                  onChange={(e) =>
-                    setObjByTypeDraft((o) => ({ ...o, assurance: { ...o.assurance, [at]: Number(e.target.value) || 0 } }))
-                  }
-                  className="w-full px-2 py-2 rounded-lg text-sm text-center"
-                  style={{ border: `1px solid ${THEME.line}` }}
-                />
-              </label>
-            ))}
-          </div>
-          <div className="grid grid-cols-3 gap-2 mb-4">
-            {CREDIT_TYPES.map((ct) => (
-              <label key={ct} className="block">
-                <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{ct} (€)</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={objByTypeDraft.credit[ct] || 0}
-                  onChange={(e) =>
-                    setObjByTypeDraft((o) => ({ ...o, credit: { ...o.credit, [ct]: Number(e.target.value) || 0 } }))
-                  }
-                  className="w-full px-2 py-2 rounded-lg text-sm text-center"
-                  style={{ border: `1px solid ${THEME.line}` }}
-                />
-              </label>
-            ))}
-          </div>
+          <button
+            type="button"
+            onClick={() => setShowProduitObjectifs((v) => !v)}
+            className="w-full flex items-center justify-between gap-2 text-xs font-medium mb-2"
+            style={{ color: THEME.navySoft }}
+          >
+            <span>Objectifs par produit (optionnel)</span>
+            <ChevronRight size={13} style={{ transform: showProduitObjectifs ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+          </button>
+          {showProduitObjectifs && (
+            <>
+              <div className="grid grid-cols-3 gap-2 mb-2">
+                {ASSURANCE_TYPES.map((at) => (
+                  <label key={at} className="block">
+                    <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{at} (nb)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={objByTypeDraft.assurance[at] || 0}
+                      onChange={(e) =>
+                        setObjByTypeDraft((o) => ({ ...o, assurance: { ...o.assurance, [at]: Number(e.target.value) || 0 } }))
+                      }
+                      className="w-full px-2 py-2 rounded-lg text-sm text-center"
+                      style={{ border: `1px solid ${THEME.line}` }}
+                    />
+                  </label>
+                ))}
+              </div>
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                {CREDIT_TYPES.map((ct) => (
+                  <label key={ct} className="block">
+                    <span className="block text-xs mb-1 font-semibold" style={{ color: THEME.navySoft }}>{ct} (€)</span>
+                    <input
+                      type="number"
+                      min="0"
+                      value={objByTypeDraft.credit[ct] || 0}
+                      onChange={(e) =>
+                        setObjByTypeDraft((o) => ({ ...o, credit: { ...o.credit, [ct]: Number(e.target.value) || 0 } }))
+                      }
+                      className="w-full px-2 py-2 rounded-lg text-sm text-center"
+                      style={{ border: `1px solid ${THEME.line}` }}
+                    />
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
 
           <div className="flex gap-2">
             <button
@@ -3063,6 +3115,19 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
   // Sans objectif fixé (0), "reste" tombe toujours à 0 : ne pas afficher un
   // "Objectif atteint" trompeur quand il n'y a en réalité aucun objectif.
   const atteint = objective > 0 && reste === 0;
+  // Couleur de la jauge conditionnée à la progression réelle (pas seulement
+  // à la couleur "thème" du bloc) : rouge en dessous de 50%, orange entre
+  // 50 et 99%, vert dès l'objectif atteint — un repère visuel immédiat
+  // indépendant du produit concerné. Sans objectif fixé, on garde la
+  // couleur neutre du bloc plutôt qu'un rouge qui n'aurait pas de sens.
+  const gauge =
+    objective <= 0
+      ? { fill: color, track: colorSoft }
+      : pct >= 100
+      ? { fill: THEME.teal, track: THEME.tealSoft }
+      : pct >= 50
+      ? { fill: THEME.amber, track: THEME.amberSoft }
+      : { fill: THEME.red, track: THEME.redSoft };
   return (
     <div className="rounded-xl p-4" style={{ background: THEME.bg }}>
       <div className="flex items-center justify-between mb-2">
@@ -3102,8 +3167,8 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
         </div>
       )}
 
-      <div className="h-1.5 rounded-full overflow-hidden mb-2" style={{ background: colorSoft }}>
-        <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+      <div className="h-2.5 rounded-full overflow-hidden mb-2" style={{ background: gauge.track }}>
+        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: gauge.fill }} />
       </div>
       <div className="text-xs font-medium" style={{ color: atteint ? color : THEME.navySoft }}>
         {atteint
