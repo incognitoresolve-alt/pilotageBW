@@ -104,19 +104,32 @@ function apiPost(path, payload) {
   });
 }
 
+// Construit un message d'erreur précis à partir d'une réponse en échec :
+// code d'erreur renvoyé par le Worker (`body.error`), complété par le
+// détail diagnostique du filet de sécurité (`body.detail`, voir
+// worker/index.js > handleApi) quand il est présent — pour voir
+// exactement où le problème se situe au lieu d'un message générique.
+async function describeApiFailure(res) {
+  const body = await res.json().catch(() => ({}));
+  const reason = body.error || `HTTP ${res.status}`;
+  return body.detail ? `${reason} — ${body.detail}` : reason;
+}
+
 // Connexion collaborateur par e-mail + mot de passe. Le hash n'est jamais
 // transmis au navigateur — voir worker/index.js > /api/login-member.
 // Retourne { ok, member } si les identifiants sont valides, { needsPassword,
 // member } si aucun mot de passe n'est encore défini pour ce compte (juste
 // après activation ou après une réinitialisation par le responsable), ou
-// { error } sinon ("not_found" | "invalid_password").
+// { error } sinon ("not_found" | "invalid_password" | "too_many_attempts" |
+// tout code renvoyé par le Worker, y compris via le filet de sécurité).
 export async function loginMember(email, password) {
   try {
     const res = await apiPost("/api/login-member", { email, password });
     const body = await res.json().catch(() => ({}));
+    if (!res.ok && !body.error) return { error: `HTTP ${res.status}` };
     return body;
-  } catch {
-    return { error: "network" };
+  } catch (e) {
+    return { error: `network: ${e.message}` };
   }
 }
 
@@ -124,10 +137,7 @@ export async function loginMember(email, password) {
 // d'un collaborateur. Lève une erreur si le serveur refuse.
 export async function setMemberPassword(memberId, password, managerCode) {
   const res = await apiPost("/api/set-password", { memberId, password, managerCode });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(await describeApiFailure(res));
 }
 
 // Réinitialisation par le responsable : supprime le mot de passe existant
@@ -135,8 +145,5 @@ export async function setMemberPassword(memberId, password, managerCode) {
 // toucher à ses données.
 export async function resetMemberPassword(memberId, managerCode) {
   const res = await apiPost("/api/reset-password", { memberId, managerCode });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(await describeApiFailure(res));
 }

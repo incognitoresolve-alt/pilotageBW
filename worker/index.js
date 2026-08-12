@@ -151,6 +151,25 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/")) {
+      // Filet de sécurité : toute exception non prévue (échec KV, erreur
+      // crypto, etc.) renvoie un diagnostic JSON exploitable au lieu de la
+      // page d'erreur générique de Cloudflare — sans ça, le client ne
+      // reçoit pas de JSON valide et l'erreur affichée à l'écran perd
+      // toute information utile (voir describeFailure / apiPost côté
+      // client, qui remontent `error`/`detail` dans le message affiché).
+      try {
+        return await handleApi(request, env, url);
+      } catch (e) {
+        return jsonResponse({ error: "server_error", detail: String(e?.message || e) }, 500);
+      }
+    }
+
+    return env.ASSETS.fetch(request);
+  },
+};
+
+async function handleApi(request, env, url) {
+  {
       const clientSecret = request.headers.get("X-App-Secret") || "";
       const serverSecret = (await resolveSecret(env.APP_SECRET)) || "";
       if (clientSecret !== serverSecret) {
@@ -302,8 +321,5 @@ export default {
       }
 
       return new Response("Not found", { status: 404 });
-    }
-
-    return env.ASSETS.fetch(request);
-  },
-};
+  }
+}

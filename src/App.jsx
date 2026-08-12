@@ -768,7 +768,7 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
       onLogin(result.member);
       return;
     }
-    setError("Connexion impossible — vérifiez votre connexion et réessayez.");
+    setError(`Connexion impossible (${result.error || "raison inconnue"}) — vérifiez votre connexion et réessayez.`);
   };
 
   const submitClaim = async (e) => {
@@ -784,7 +784,7 @@ function LoginScreen({ members, onCreateMember, onLogin, notify }) {
       setError(
         e.message === "too_many_attempts"
           ? "Trop de tentatives — réessayez dans quelques minutes."
-          : "Impossible d'enregistrer le mot de passe — réessayez."
+          : `Impossible d'enregistrer le mot de passe (${e.message}) — réessayez.`
       );
     }
     setBusy(false);
@@ -2631,8 +2631,10 @@ function ResetPasswordControl({ member, notify, compact = false }) {
       await resetMemberPassword(member.id, code);
       notify(`Mot de passe réinitialisé — ${member.name} pourra en créer un nouveau à sa prochaine connexion.`);
       cancel();
-    } catch {
-      setError("Code d'accès responsable incorrect (ou échec réseau).");
+    } catch (e) {
+      if (e.message === "manager_code_required") setError("Code d'accès responsable incorrect.");
+      else if (e.message === "too_many_attempts") setError("Trop de tentatives — réessayez dans quelques minutes.");
+      else setError(`Échec de la réinitialisation (${e.message}).`);
     }
     setBusy(false);
   };
