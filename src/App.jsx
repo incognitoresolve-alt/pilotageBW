@@ -213,7 +213,11 @@ function computeMemberMetrics(member, entries, monthFigures, creditRecords, view
   const creditCountParType = creditCountParTypeFor(creditRecords, member.id, viewMonth);
   const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditRealiseParType[ct] || 0), 0);
   const creditCountTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditCountParType[ct] || 0), 0);
-  const resteC = Math.max(0, objC - creditTotal);
+  // objC ("Objectif crédits (nombre)") est un nombre de dossiers, pas un
+  // montant — le comparer à creditTotal (somme en €) produisait un "reste"
+  // toujours à 0 dès qu'un montant significatif était saisi, quel que soit
+  // le nombre réel de dossiers financés. Comparaison nombre contre nombre.
+  const resteC = Math.max(0, objC - creditCountTotal);
   const assuranceRealise = ASSURANCE_TYPES.reduce((s, at) => s + (assuranceRealiseParType[at] || 0), 0);
   const resteA = Math.max(0, objA - assuranceRealise);
   const objectifsAssuranceParType = member.objectifsAssuranceParType || {};
@@ -238,10 +242,10 @@ function computeMemberMetrics(member, entries, monthFigures, creditRecords, view
 // "retard" n'a plus de sens.
 function memberPaceStatus(metrics, isCurrentMonth) {
   if (!isCurrentMonth) return { key: "archive", label: "Mois archivé" };
-  const { objA, objC, objM, assuranceRealise, creditTotal, montantRealise } = metrics;
+  const { objA, objC, objM, assuranceRealise, creditCountTotal, montantRealise } = metrics;
   const objectifs = [
     { obj: objA, real: assuranceRealise },
-    { obj: objC, real: creditTotal },
+    { obj: objC, real: creditCountTotal }, // objC est un nombre de dossiers, pas un montant — voir resteC ci-dessus
     { obj: objM, real: montantRealise },
   ].filter((o) => o.obj > 0);
   if (objectifs.length === 0) return { key: "neutre", label: "Aucun objectif" };
@@ -1197,17 +1201,20 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
     const collaborators = members.filter((m) => m.role === "collaborateur");
     if (collaborators.length === 0) return null;
     const monthFigures = figures[mKey] || {};
-    let assuranceRealise = 0, assuranceObjectif = 0, creditTotal = 0, creditObjectif = 0, montantRealise = 0, lateCount = 0;
+    // creditObjectif ("nombre") se compare à creditCountTotal (nombre de
+    // dossiers), pas à une somme en euros — voir computeMemberMetrics/
+    // memberPaceStatus pour le même correctif appliqué au calcul du statut.
+    let assuranceRealise = 0, assuranceObjectif = 0, creditCountTotal = 0, creditObjectif = 0, montantRealise = 0, lateCount = 0;
     collaborators.forEach((m) => {
       const metrics = computeMemberMetrics(m, entries, monthFigures, creditRecords, mKey);
       assuranceRealise += metrics.assuranceRealise;
       assuranceObjectif += metrics.objA;
-      creditTotal += metrics.creditTotal;
+      creditCountTotal += metrics.creditCountTotal;
       creditObjectif += metrics.objC;
       montantRealise += metrics.montantRealise;
       if (memberPaceStatus(metrics, true).key === "retard") lateCount += 1;
     });
-    return { assuranceRealise, assuranceObjectif, creditTotal, creditObjectif, montantRealise, lateCount };
+    return { assuranceRealise, assuranceObjectif, creditCountTotal, creditObjectif, montantRealise, lateCount };
   }, [isManager, members, entries, figures, creditRecords, mKey]);
   const pendingInvitesCount = useMemo(() => invites.filter((i) => !i.used).length, [invites]);
 
@@ -1279,7 +1286,7 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
             <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.assuranceRealise}</span> assur. / obj. {teamOverview.assuranceObjectif}
           </span>
           <span>
-            <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.creditTotal}</span> créd. / obj. {teamOverview.creditObjectif}
+            <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.creditCountTotal}</span> créd. / obj. {teamOverview.creditObjectif}
           </span>
           <span>
             <span className="font-semibold" style={{ color: THEME.navy }}>{formatEUR(teamOverview.montantRealise)}</span> vendus ce mois
@@ -2787,7 +2794,7 @@ function MemberDetailCard({
         <ProgressBlock
           icon={CreditCard}
           label="Crédits (total)"
-          value={creditTotal}
+          value={creditCountTotal}
           objective={objC}
           reste={resteC}
           color={THEME.amber}
@@ -2797,7 +2804,7 @@ function MemberDetailCard({
           draftObjective={objDraft.objectifCredit}
           readOnlyValue
           isCurrentMonth={isCurrentMonth}
-          sublabel={`${creditCountTotal} dossier${creditCountTotal !== 1 ? "s" : ""} financé${creditCountTotal !== 1 ? "s" : ""}`}
+          sublabel={`${formatEUR(creditTotal)} financés`}
         />
         <ProgressBlock
           icon={Euro}
