@@ -168,6 +168,21 @@ function performanceSeries(entries, personId, granularity) {
     }, 0),
   }));
 }
+// Même principe que performanceSeries, mais pour les crédits financés
+// (montant en €, depuis creditRecords — le chiffre officiel validé par le
+// responsable, pas les entrées auto-déclarées) — personId=null agrège
+// toute l'équipe (memberId sur un creditRecord, pas personId).
+function creditPerformanceSeries(creditRecords, personId, granularity) {
+  const buckets = buildPeriodBuckets(granularity);
+  const scoped = personId ? creditRecords.filter((r) => r.memberId === personId) : creditRecords;
+  return buckets.map((b) => ({
+    ...b,
+    value: scoped.reduce((s, r) => {
+      if (r.date < b.startISO || r.date > b.endISO) return s;
+      return s + (r.montant || 0);
+    }, 0),
+  }));
+}
 
 // Crédits réalisés par type pour un collaborateur sur un mois donné :
 // somme des saisies quotidiennes du responsable (creditRecords) sur ce
@@ -2400,6 +2415,34 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
 
   const visibleMembers = isManager ? collaborators : collaborators.filter((m) => m.id === session.id);
 
+  // File de validation quotidienne : agrège, pour toute l'équipe, ce que
+  // chaque collaborateur a déclaré AUJOURD'HUI (assurances + crédits en
+  // instance) — pour ne plus avoir à ouvrir chaque fiche une à une afin de
+  // repérer qui a de l'activité à traiter. Uniquement pertinent sur le
+  // mois en cours (une déclaration "aujourd'hui" n'a pas de sens en
+  // consultant un mois archivé).
+  const todayPending = useMemo(() => {
+    if (!isManager || !isCurrentMonth) return [];
+    const today = todayISO();
+    const todays = entries.filter((e) => e.date === today);
+    return collaborators
+      .map((m) => {
+        const mine = todays.filter((e) => e.personId === m.id);
+        if (mine.length === 0) return null;
+        const assuranceCount = mine
+          .filter((e) => e.type === "assurance")
+          .reduce((s, e) => s + (e.quantite || 1), 0);
+        const creditEntries = mine.filter((e) => e.type === "credit");
+        return {
+          member: m,
+          assuranceCount,
+          creditCount: creditEntries.length,
+          creditMontant: creditEntries.reduce((s, e) => s + (e.montant || 0), 0),
+        };
+      })
+      .filter(Boolean);
+  }, [isManager, isCurrentMonth, entries, collaborators]);
+
   // Résumés légers (statut de rythme) pour tous les collaborateurs — sert à
   // la fois la liste compacte "vue d'ensemble" et le menu déroulant, sans
   // jamais avoir à rendre les cartes détaillées de tout le monde à la fois.
@@ -2594,6 +2637,54 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
             iconOnly={false}
             disabled={saving}
           />
+        </div>
+      )}
+
+      {isManager && isCurrentMonth && collaborators.length > 0 && (
+        <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+          <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
+            <h2 className="text-sm font-semibold flex items-center gap-1.5">
+              <ClipboardList size={15} style={{ color: MANAGER_ACCENT }} /> Aujourd'hui — à valider
+            </h2>
+            {todayPending.length > 0 && (
+              <span className="text-xs font-semibold px-2 py-1 rounded-full" style={{ background: MANAGER_ACCENT_SOFT, color: MANAGER_ACCENT }}>
+                {todayPending.length} collaborateur{todayPending.length > 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+          <p className="text-xs mb-3" style={{ color: THEME.navySoft }}>
+            Ce que l'équipe a déclaré aujourd'hui, tous collaborateurs confondus — pour ne pas avoir à ouvrir chaque fiche une à une.
+          </p>
+          {todayPending.length === 0 ? (
+            <p className="text-sm py-4 text-center" style={{ color: THEME.navySoft }}>
+              Aucune vente déclarée aujourd'hui pour l'équipe.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {todayPending.map(({ member, assuranceCount, creditCount, creditMontant }) => (
+                <button
+                  key={member.id}
+                  onClick={() => setSelectedMemberId(member.id)}
+                  className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg text-sm text-left transition-colors hover:brightness-[0.98]"
+                  style={{ background: THEME.bg }}
+                >
+                  <span className="font-medium truncate">{member.name}</span>
+                  <span className="flex items-center gap-2 flex-shrink-0 text-xs">
+                    {assuranceCount > 0 && (
+                      <span className="flex items-center gap-1 px-2 py-1 rounded-full" style={{ background: THEME.tealSoft, color: THEME.teal }}>
+                        <Shield size={11} /> {assuranceCount}
+                      </span>
+                    )}
+                    {creditCount > 0 && (
+                      <span className="flex items-center gap-1 px-2 py-1 rounded-full" style={{ background: THEME.amberSoft, color: THEME.amber }}>
+                        <CreditCard size={11} /> {creditCount} · {formatEUR(creditMontant)}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -3019,6 +3110,7 @@ function MemberDetailCard({
         <div className="px-5 pb-5">
           <PerformanceChart
             entries={entries}
+            creditRecords={creditRecords}
             lines={
               isManager
                 ? [
@@ -3324,6 +3416,20 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
       : pct >= 50
       ? { fill: THEME.amber, track: THEME.amberSoft }
       : { fill: THEME.red, track: THEME.redSoft };
+  // Projection de fin de mois : extrapole le rythme actuel (réalisé ÷
+  // fraction du mois déjà écoulée) — permet de repérer, tôt dans le mois,
+  // qui n'atteindra pas son objectif au rythme actuel plutôt que de
+  // l'apprendre le 28. Uniquement sur le mois en cours, hors édition, et
+  // seulement tant que l'objectif n'est pas déjà atteint.
+  let projectedPct = null;
+  if (isCurrentMonth && !editing && objective > 0 && !atteint) {
+    const now = new Date();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const elapsedFraction = now.getDate() / daysInMonth;
+    if (elapsedFraction > 0) {
+      projectedPct = Math.min(999, Math.round((value / elapsedFraction / objective) * 100));
+    }
+  }
   return (
     <div className="rounded-xl p-4" style={{ background: THEME.bg }}>
       <div className="flex items-center justify-between mb-2">
@@ -3375,6 +3481,11 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
             : `Manquant : ${format(reste)}`
           : "Aucun objectif fixé"}
       </div>
+      {projectedPct !== null && (
+        <div className="text-xs mt-1" style={{ color: projectedPct >= 100 ? THEME.teal : THEME.navySoft }}>
+          À ce rythme : ~{projectedPct}&nbsp;% en fin de mois
+        </div>
+      )}
       {sublabel && (
         <div className="text-xs mt-1" style={{ color: THEME.navySoft }}>
           {sublabel}
@@ -3384,16 +3495,29 @@ function ProgressBlock({ icon: Icon, label, value, objective, reste, color, colo
   );
 }
 
-// Graphique linéaire de performance (dossiers vendus) d'un collaborateur —
-// bascule Jour/Semaine/Mois/Année, survol avec repère + infobulle, et un
-// détail sous forme de tableau (accessible sans passer par la souris).
-function PerformanceChart({ entries, lines, title = "Performance — assurances vendues" }) {
+// Graphique linéaire de performance (dossiers vendus, ou crédits financés
+// si creditRecords est fourni) d'un collaborateur — bascule
+// Assurances/Crédits (si creditRecords fourni) + Jour/Semaine/Mois/Année,
+// survol avec repère + infobulle, et un détail sous forme de tableau
+// (accessible sans passer par la souris).
+function PerformanceChart({ entries, creditRecords, lines }) {
   const [granularity, setGranularity] = useState("mois");
+  const [metric, setMetric] = useState("assurances"); // "assurances" | "credits"
   const [hoverIdx, setHoverIdx] = useState(null);
+  const showMetricToggle = !!creditRecords;
+  const isCredits = showMetricToggle && metric === "credits";
+  const format = isCredits ? formatEUR : (v) => v;
+  const title = isCredits ? "Performance — crédits financés" : "Performance — assurances vendues";
 
   const linesData = useMemo(
-    () => lines.map((l) => ({ ...l, data: performanceSeries(entries, l.personId, granularity) })),
-    [entries, lines, granularity]
+    () =>
+      lines.map((l) => ({
+        ...l,
+        data: isCredits
+          ? creditPerformanceSeries(creditRecords, l.personId, granularity)
+          : performanceSeries(entries, l.personId, granularity),
+      })),
+    [entries, creditRecords, isCredits, lines, granularity]
   );
 
   const W = 600;
@@ -3433,7 +3557,7 @@ function PerformanceChart({ entries, lines, title = "Performance — assurances 
   // chevauchement quand il y a beaucoup de périodes (ex. 14 jours).
   const labelEvery = n > 8 ? 2 : 1;
 
-  const ariaLabel = `Évolution des assurances vendues ${
+  const ariaLabel = `Évolution des ${isCredits ? "crédits financés" : "assurances vendues"} ${
     multi ? `— ${linesGeom.map((l) => l.label).join(" et ")}` : linesGeom[0].personId ? `par ${linesGeom[0].label}` : "pour toute l'équipe"
   }, par ${granularity}`;
 
@@ -3443,6 +3567,28 @@ function PerformanceChart({ entries, lines, title = "Performance — assurances 
         <div className="flex items-center gap-1.5 text-xs font-semibold" style={{ color: THEME.navySoft }}>
           <BarChart3 size={14} style={{ color: linesGeom[0].color }} /> {title}
         </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {showMetricToggle && (
+            <div className="flex gap-1 rounded-lg p-0.5" style={{ background: THEME.card }}>
+              {[{ key: "assurances", label: "Assurances" }, { key: "credits", label: "Crédits" }].map((m) => (
+                <button
+                  key={m.key}
+                  type="button"
+                  onClick={() => {
+                    setMetric(m.key);
+                    setHoverIdx(null);
+                  }}
+                  className="px-2 py-1 rounded-md text-[11px] font-semibold transition-colors"
+                  style={{
+                    background: metric === m.key ? MANAGER_ACCENT : "transparent",
+                    color: metric === m.key ? "#fff" : THEME.navySoft,
+                  }}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          )}
         <div className="flex gap-1 rounded-lg p-0.5" style={{ background: THEME.card }}>
           {PERIOD_OPTIONS.map((p) => (
             <button
@@ -3461,6 +3607,7 @@ function PerformanceChart({ entries, lines, title = "Performance — assurances 
               {p.label}
             </button>
           ))}
+        </div>
         </div>
       </div>
 
@@ -3523,7 +3670,7 @@ function PerformanceChart({ entries, lines, title = "Performance — assurances 
             {linesGeom.map((l) => (
               <div key={l.key} className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: l.color }} />
-                <span className="font-semibold" style={{ fontFamily: FONT_DISPLAY }}>{l.points[activeIdx].value}</span>
+                <span className="font-semibold" style={{ fontFamily: FONT_DISPLAY }}>{format(l.points[activeIdx].value)}</span>
                 {multi && <span style={{ color: "rgba(255,255,255,0.7)" }}>{l.label}</span>}
               </div>
             ))}
@@ -3533,19 +3680,19 @@ function PerformanceChart({ entries, lines, title = "Performance — assurances 
 
       {!multi ? (
         <div className="text-xs mt-1" style={{ color: THEME.navySoft }}>
-          Total sur la période : <strong style={{ color: THEME.navy }}>{linesGeom[0].data.reduce((s, b) => s + b.value, 0)}</strong>
+          Total sur la période : <strong style={{ color: THEME.navy }}>{format(linesGeom[0].data.reduce((s, b) => s + b.value, 0))}</strong>
         </div>
       ) : (
         <div className="flex items-center gap-4 flex-wrap text-xs mt-1" style={{ color: THEME.navySoft }}>
           {linesGeom.map((l) => (
             <div key={l.key} className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: l.color }} />
-              Total {l.label} : <strong style={{ color: THEME.navy }}>{l.data.reduce((s, b) => s + b.value, 0)}</strong>
+              Total {l.label} : <strong style={{ color: THEME.navy }}>{format(l.data.reduce((s, b) => s + b.value, 0))}</strong>
             </div>
           ))}
         </div>
       )}
-      <PerformanceTable buckets={bucket} lines={linesGeom} />
+      <PerformanceTable buckets={bucket} lines={linesGeom} format={format} />
     </div>
   );
 }
@@ -3569,7 +3716,7 @@ function ChartLegend({ lines }) {
 // accessible du graphique (lecteur d'écran, sans survol nécessaire).
 // Chaque puce affiche la valeur de chaque série (avec pastille couleur si
 // plusieurs séries) pour la période correspondante.
-function PerformanceTable({ buckets, lines }) {
+function PerformanceTable({ buckets, lines, format = (v) => v }) {
   const multi = lines.length > 1;
   return (
     <details className="mt-1">
@@ -3582,14 +3729,14 @@ function PerformanceTable({ buckets, lines }) {
             <div style={{ color: THEME.navySoft }}>{b.label}</div>
             {!multi ? (
               <div className="font-semibold mt-0.5" style={{ color: THEME.navy, fontVariantNumeric: "tabular-nums" }}>
-                {lines[0].data[i].value}
+                {format(lines[0].data[i].value)}
               </div>
             ) : (
               <div className="flex flex-col gap-0.5 mt-0.5">
                 {lines.map((l) => (
                   <div key={l.key} className="flex items-center justify-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: l.color }} />
-                    <span className="font-semibold" style={{ color: THEME.navy, fontVariantNumeric: "tabular-nums" }}>{l.data[i].value}</span>
+                    <span className="font-semibold" style={{ color: THEME.navy, fontVariantNumeric: "tabular-nums" }}>{format(l.data[i].value)}</span>
                   </div>
                 ))}
               </div>
