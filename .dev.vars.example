@@ -1,0 +1,20 @@
+# Copier ce fichier en .dev.vars (déjà dans .gitignore — jamais committé)
+# pour le développement local avec `wrangler dev` / `npm run worker:dev`.
+# En production, ces 3 valeurs se définissent avec `wrangler secret put
+# <NOM>` (jamais dans wrangler.toml) — voir README > Sécurité.
+
+# Code d'accès partagé demandé à l'ouverture du site (écran de
+# verrouillage) — n'importe quelle chaîne, changez-la avant mise en
+# production. Voir POST /api/unlock dans worker/index.js.
+SITE_ACCESS_CODE=changez-moi
+
+# Code d'accès pour passer au rôle "responsable" (écran de connexion,
+# réinitialisation de mot de passe). Sans lien avec SITE_ACCESS_CODE —
+# gardez les deux différents.
+MANAGER_CODE=RESPONSABLE2026
+
+# Clé de signature des jetons de session délivrés par /api/unlock — une
+# chaîne aléatoire longue (ex. `openssl rand -hex 32`), jamais devinable.
+# La faire tourner invalide instantanément tous les jetons déjà distribués
+# (déconnecte tout le monde, y compris d'éventuels jetons compromis).
+SESSION_SECRET=changez-moi-aussi

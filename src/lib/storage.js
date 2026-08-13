@@ -6,21 +6,79 @@
 // convenience, not something that should sync.
 const PREFIX = "suivi-commercial";
 const API_BASE = "/api/storage";
-
-// Doit correspondre au secret APP_SECRET configuré côté Worker
-// (wrangler secret put APP_SECRET). Voir README > Sécurité.
-const APP_SECRET = import.meta.env.VITE_APP_SECRET || "";
+const SITE_TOKEN_KEY = `${PREFIX}:local:site-token`;
 
 function localKey(key) {
   return `${PREFIX}:local:${key}`;
 }
 
+// --- Verrou d'accès au site ------------------------------------------------
+// Le code d'accès (SITE_ACCESS_CODE côté Worker) n'est jamais envoyé au
+// navigateur : unlockSite() l'échange contre un jeton de session opaque,
+// signé côté serveur — voir worker/index.js > /api/unlock. C'est ce jeton
+// (pas le code) qui est stocké ici et joint à chaque appel API ensuite.
+function readStoredToken() {
+  try {
+    const raw = window.localStorage.getItem(SITE_TOKEN_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.token || !parsed?.expiresAt) return null;
+    // Vérification locale indicative uniquement (évite d'envoyer un jeton
+    // qu'on sait déjà expiré) — le Worker reste seul juge de la validité
+    // réelle (signature HMAC), voir verifySessionToken.
+    if (parsed.expiresAt < Date.now()) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+function storeToken(token, expiresAt) {
+  window.localStorage.setItem(SITE_TOKEN_KEY, JSON.stringify({ token, expiresAt }));
+}
+export function hasSiteToken() {
+  return !!readStoredToken();
+}
+export function clearSiteToken() {
+  window.localStorage.removeItem(SITE_TOKEN_KEY);
+}
+
+// Échange le code d'accès contre un jeton de session, stocké localement
+// (par appareil, comme "last-session"). Retourne { ok:true } ou
+// { ok:false, error } ("invalid_code" | "too_many_attempts" | "network: ...").
+export async function unlockSite(code) {
+  try {
+    const res = await fetch("/api/unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: body.error || `HTTP ${res.status}` };
+    storeToken(body.token, body.expiresAt);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: `network: ${e.message}` };
+  }
+}
+
+function sessionHeaders(extra) {
+  const stored = readStoredToken();
+  return { ...extra, "X-Session-Token": stored?.token || "" };
+}
+
+// true si une erreur vient d'un jeton de session absent/expiré/invalide
+// (code "session_required" renvoyé par le Worker sur toute route /api/*
+// autre que /api/unlock — voir verifySessionToken) : sert à App.jsx pour
+// effacer le jeton local et réafficher l'écran de verrouillage au lieu
+// d'un message d'erreur réseau générique.
+export function isSessionError(e) {
+  return !!e && typeof e.message === "string" && e.message.includes("session_required");
+}
+
 async function describeFailure(res) {
   try {
     const body = await res.json();
-    if (body && typeof body.serverSecretLength === "number") {
-      return `${res.status}: secret serveur=${body.serverSecretConfigured ? body.serverSecretLength + " car." : "absent"}, secret envoyé=${body.clientSecretLength} car.`;
-    }
+    if (body?.error) return body.error;
   } catch {
     // pas de corps JSON exploitable, on retombe sur le statut brut
   }
@@ -30,7 +88,7 @@ async function describeFailure(res) {
 async function get(key, shared) {
   if (shared) {
     const res = await fetch(`${API_BASE}/${encodeURIComponent(key)}`, {
-      headers: { "X-App-Secret": APP_SECRET },
+      headers: sessionHeaders(),
     });
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`GET ${key} failed: ${await describeFailure(res)}`);
@@ -49,10 +107,7 @@ async function set(key, value, shared, expectedVersion) {
     const payload = typeof expectedVersion === "number" ? { value, expectedVersion } : { value };
     const res = await fetch(`${API_BASE}/${encodeURIComponent(key)}`, {
       method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        "X-App-Secret": APP_SECRET,
-      },
+      headers: sessionHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(payload),
     });
     if (res.status === 409) {
@@ -81,10 +136,7 @@ export async function verifyManagerCode(code) {
   try {
     const res = await fetch("/api/verify-manager-code", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-App-Secret": APP_SECRET,
-      },
+      headers: sessionHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ code }),
     });
     if (res.status === 429) return { valid: false, limited: true };
@@ -99,7 +151,7 @@ export async function verifyManagerCode(code) {
 function apiPost(path, payload) {
   return fetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-App-Secret": APP_SECRET },
+    headers: sessionHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
   });
 }

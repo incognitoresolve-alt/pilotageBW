@@ -2,16 +2,23 @@
 // et expose une API partagée sur Cloudflare KV. Même contrat d'API que le
 // shim client (GET/PUT /api/storage/:key) — voir src/lib/storage.js.
 //
-// Toute requête vers /api/* doit présenter le header X-App-Secret avec la
-// valeur du secret APP_SECRET (défini dans wrangler.toml). Ce n'est pas une
-// vraie authentification par utilisateur — la valeur finit dans le bundle JS
-// public — mais ça ferme l'accès direct et non authentifié à l'API pour un
-// visiteur ou un robot qui découvrirait l'URL sans passer par l'application.
+// Toute requête vers /api/* (sauf /api/unlock lui-même) doit présenter le
+// header X-Session-Token avec un jeton signé obtenu via POST /api/unlock
+// (code d'accès, voir SITE_ACCESS_CODE plus bas). Contrairement à l'ancien
+// mécanisme (X-App-Secret comparé à une valeur AUSSI présente dans le
+// bundle JS public, donc pas vraiment secrète), le code d'accès n'est
+// JAMAIS envoyé au navigateur : seul un jeton opaque et limité dans le
+// temps l'est, après vérification côté Worker — voir issueSessionToken /
+// verifySessionToken. Ce n'est toujours pas une authentification par
+// utilisateur (le jeton est partagé par toute l'équipe, comme le code),
+// mais le secret lui-même reste invisible même en inspectant le bundle.
 
-// APP_SECRET / MANAGER_CODE peuvent être liés soit comme une simple
-// variable/secret classique (chaîne directement), soit comme un binding
-// "Secrets Store" Cloudflare (objet exposant une méthode .get() async) —
-// on gère les deux formes.
+// SITE_ACCESS_CODE / MANAGER_CODE / SESSION_SECRET peuvent être liés soit
+// comme une simple variable/secret classique (chaîne directement), soit
+// comme un binding "Secrets Store" Cloudflare (objet exposant une méthode
+// .get() async) — on gère les deux formes. Les trois doivent être définis
+// via `wrangler secret put <NOM>` (jamais dans wrangler.toml : un secret
+// mis dans [vars] finit committé en clair dans le dépôt Git).
 async function resolveSecret(binding) {
   if (typeof binding === "string") return binding;
   if (binding && typeof binding.get === "function") return await binding.get();
@@ -62,6 +69,46 @@ async function checkManagerCode(env, request, providedCode) {
   if (!valid) await recordFailedAttempt(env, bucket);
   else await clearRateLimit(env, bucket);
   return { ok: valid, limited: false };
+}
+
+// --- Verrou d'accès au site (code partagé, jeton de session signé) -------
+// Le code (SITE_ACCESS_CODE) n'est vérifié que côté Worker, jamais envoyé
+// au client. En échange d'un code correct, /api/unlock délivre un jeton
+// opaque "<expiration>.<signature HMAC>" — c'est ce jeton, pas le code,
+// que le navigateur envoie ensuite sur chaque appel /api/* (X-Session-Token).
+// Un jeton révèle seulement une date d'expiration ; sans SESSION_SECRET
+// (jamais transmis), impossible d'en forger un valide. Faire tourner
+// SESSION_SECRET invalide instantanément tous les jetons déjà distribués.
+const SESSION_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 jours
+
+async function hmacHex(secret, message) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
+  return toHex(new Uint8Array(sig));
+}
+
+async function issueSessionToken(env) {
+  const secret = (await resolveSecret(env.SESSION_SECRET)) || "";
+  const expiresAt = Date.now() + SESSION_TOKEN_TTL_MS;
+  const sig = await hmacHex(secret, String(expiresAt));
+  return { token: `${expiresAt}.${sig}`, expiresAt };
+}
+
+async function verifySessionToken(env, token) {
+  if (!token || typeof token !== "string" || !token.includes(".")) return false;
+  const [expStr, sig] = token.split(".");
+  const expiresAt = Number(expStr);
+  if (!Number.isFinite(expiresAt) || expiresAt < Date.now()) return false;
+  const secret = (await resolveSecret(env.SESSION_SECRET)) || "";
+  if (!secret) return false;
+  const expected = await hmacHex(secret, expStr);
+  return sig.length === expected.length && timingSafeEqual(sig, expected);
 }
 
 // --- Mots de passe collaborateurs -----------------------------------------
@@ -134,22 +181,6 @@ function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function unauthorized(serverSecret, clientSecret) {
-  // Diagnostic minimal (longueurs uniquement, jamais les valeurs) pour
-  // distinguer "APP_SECRET absent côté Worker" de "VITE_APP_SECRET
-  // absent/différent côté build" sans avoir à comparer des captures
-  // d'écran de secrets à la main.
-  return new Response(
-    JSON.stringify({
-      error: "unauthorized",
-      serverSecretConfigured: serverSecret.length > 0,
-      serverSecretLength: serverSecret.length,
-      clientSecretLength: clientSecret.length,
-    }),
-    { status: 401, headers: { "Content-Type": "application/json" } }
-  );
-}
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -173,11 +204,29 @@ export default {
 };
 
 async function handleApi(request, env, url) {
+  // Seule route accessible sans jeton de session : c'est elle qui en
+  // délivre un, en échange du code d'accès (jamais renvoyé au client,
+  // quel que soit le résultat — voir verifySessionToken).
+  if (url.pathname === "/api/unlock" && request.method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    const bucket = `unlock:${clientIp(request)}`;
+    if (await isRateLimited(env, bucket, 10)) return tooManyAttempts();
+    const siteCode = (await resolveSecret(env.SITE_ACCESS_CODE)) || "";
+    const provided = String(body.code || "");
+    const valid = !!siteCode && timingSafeEqual(provided, siteCode);
+    if (!valid) {
+      await recordFailedAttempt(env, bucket);
+      return jsonResponse({ error: "invalid_code" }, 401);
+    }
+    await clearRateLimit(env, bucket);
+    const { token, expiresAt } = await issueSessionToken(env);
+    return jsonResponse({ token, expiresAt });
+  }
+
   {
-      const clientSecret = request.headers.get("X-App-Secret") || "";
-      const serverSecret = (await resolveSecret(env.APP_SECRET)) || "";
-      if (clientSecret !== serverSecret) {
-        return unauthorized(serverSecret, clientSecret);
+      const sessionToken = request.headers.get("X-Session-Token") || "";
+      if (!(await verifySessionToken(env, sessionToken))) {
+        return jsonResponse({ error: "session_required" }, 401);
       }
 
       const storageMatch = url.pathname.match(/^\/api\/storage\/([^/]+)$/);

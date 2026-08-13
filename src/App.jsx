@@ -6,7 +6,10 @@ import {
   RefreshCw, Loader2, BarChart3, Trophy, KeyRound, Eye, EyeOff
 } from "lucide-react";
 import * as XLSX from "xlsx";
-import { verifyManagerCode, loginMember, setMemberPassword, resetMemberPassword } from "./lib/storage";
+import {
+  verifyManagerCode, loginMember, setMemberPassword, resetMemberPassword,
+  hasSiteToken, unlockSite, clearSiteToken, isSessionError,
+} from "./lib/storage";
 
 const PASSWORD_MIN_LEN = 6;
 
@@ -372,6 +375,13 @@ async function saveLocal(key, value) {
 }
 
 export default function App() {
+  // Verrou d'accès au site (code d'accès partagé, jamais envoyé au
+  // navigateur — voir src/lib/storage.js > unlockSite). Tant que ce n'est
+  // pas vrai, aucune donnée n'est chargée : seul <SiteAccessGate/> est
+  // rendu. hasSiteToken() ne fait qu'une vérification locale indicative
+  // (présence + expiration côté client) — le Worker reste seul juge de la
+  // validité réelle du jeton à chaque appel.
+  const [unlocked, setUnlocked] = useState(() => hasSiteToken());
   const [ready, setReady] = useState(false);
   const [members, setMembers] = useState([]);
   const [entries, setEntries] = useState([]);
@@ -415,6 +425,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!unlocked) return;
     (async () => {
       let loadError = null;
       const onError = (e) => {
@@ -457,13 +468,22 @@ export default function App() {
       }
       setReady(true);
       if (loadError) {
-        setServerStatus({ ok: false, detail: loadError.message });
-        notify(`Chargement des données impossible (${loadError.message}) — les chiffres affichés peuvent être incomplets.`, true);
+        if (isSessionError(loadError)) {
+          // Le jeton stocké localement a expiré (ou a été invalidé côté
+          // Worker, ex. rotation de SESSION_SECRET) entre le chargement de
+          // la page et cette requête — effacer et réafficher le verrou
+          // plutôt qu'un message d'erreur qui ne se résoudrait jamais.
+          clearSiteToken();
+          setUnlocked(false);
+        } else {
+          setServerStatus({ ok: false, detail: loadError.message });
+          notify(`Chargement des données impossible (${loadError.message}) — les chiffres affichés peuvent être incomplets.`, true);
+        }
       } else {
         setServerStatus({ ok: true, detail: null });
       }
     })();
-  }, []);
+  }, [unlocked]);
 
   // Les données partagées (membres, ventes, chiffres, invitations) ne sont
   // chargées qu'une fois au démarrage : sans ce rafraîchissement, un
@@ -486,6 +506,11 @@ export default function App() {
       loadShared("creditRecords", null, onError),
     ]);
     if (loadError) {
+      if (isSessionError(loadError)) {
+        clearSiteToken();
+        setUnlocked(false);
+        return false;
+      }
       setServerStatus({ ok: false, detail: loadError.message });
       if (!silent) notify(`Actualisation impossible (${loadError.message}).`, true);
       return false;
@@ -565,6 +590,12 @@ export default function App() {
     } catch (e) {
       console.error("storage set failed", key, e);
       setState(previous);
+      if (isSessionError(e)) {
+        clearSiteToken();
+        setUnlocked(false);
+        notify("Session expirée — ressaisissez le code d'accès.", true);
+        return false;
+      }
       setServerStatus({ ok: false, detail: e.message });
       if (e.conflict) {
         notify("Ces données ont été modifiées ailleurs entre-temps — actualisation en cours, réessayez.", true);
@@ -630,6 +661,10 @@ export default function App() {
     setSession(null);
     await saveLocal("last-session", null);
   };
+
+  if (!unlocked) {
+    return <SiteAccessGate onUnlock={() => setUnlocked(true)} />;
+  }
 
   if (!ready) {
     return (
@@ -774,6 +809,83 @@ const FONT_BODY = "'Inter', sans-serif";
 // <style> global) — donne une profondeur discrète sans alourdir le tracé
 // des bordures.
 const SHADOW_CARD = "0 1px 2px rgba(15,27,51,0.05), 0 10px 28px -8px rgba(15,27,51,0.16)";
+
+/* ---------------- VERROU D'ACCÈS AU SITE ---------------- */
+// Premier écran rencontré, avant même la connexion collaborateur/
+// responsable : demande le code d'accès partagé de l'équipe, vérifié
+// côté Worker (POST /api/unlock) — voir src/lib/storage.js. Le code lui-
+// même n'est jamais renvoyé au navigateur, contrairement à l'ancien
+// mécanisme (APP_SECRET) qui finissait dans le bundle JS public.
+function SiteAccessGate({ onUnlock }) {
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    setError("");
+    if (!code) return setError("Renseignez le code d'accès.");
+    setBusy(true);
+    const result = await unlockSite(code);
+    setBusy(false);
+    if (result.ok) return onUnlock();
+    if (result.error === "invalid_code") return setError("Code d'accès incorrect.");
+    if (result.error === "too_many_attempts") return setError("Trop de tentatives — réessayez dans quelques minutes.");
+    setError(`Connexion impossible (${result.error}) — vérifiez votre connexion et réessayez.`);
+  };
+
+  return (
+    <div
+      className="min-h-screen flex items-center justify-center px-4"
+      style={{ background: `radial-gradient(circle at 50% -10%, ${THEME.tealSoft} 0%, ${THEME.bg} 55%)`, fontFamily: FONT_BODY }}
+    >
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=Inter:wght@400;500;600;700&display=swap');`}</style>
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-8">
+          <div
+            className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4"
+            style={{ background: `linear-gradient(155deg, ${THEME.navy}, #0B2E24)` }}
+          >
+            <Lock size={24} color={THEME.teal} />
+          </div>
+          <h1 style={{ fontFamily: FONT_DISPLAY, color: THEME.navy, letterSpacing: "-0.01em" }} className="text-3xl font-semibold">
+            Suivi Commercial
+          </h1>
+          <p className="text-sm mt-1.5" style={{ color: THEME.navySoft }}>
+            Accès réservé à l'équipe — code requis
+          </p>
+        </div>
+
+        <form
+          onSubmit={submit}
+          className="rounded-2xl p-6 space-y-4"
+          style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}
+        >
+          <Field label="Code d'accès">
+            <PasswordInput value={code} onChange={(e) => setCode(e.target.value)} autoComplete="off" />
+          </Field>
+          {error && (
+            <div className="text-sm flex items-center gap-1.5" style={{ color: THEME.red }}>
+              <AlertCircle size={14} /> {error}
+            </div>
+          )}
+          <button
+            type="submit"
+            disabled={busy}
+            className="sc-btn w-full py-2.5 rounded-lg text-sm font-semibold text-white flex items-center justify-center gap-1.5 transition-opacity hover:opacity-90 disabled:opacity-60"
+            style={{ background: THEME.navy, boxShadow: "0 8px 20px -6px rgba(20,28,46,0.5)" }}
+          >
+            {busy && <Loader2 size={15} className="animate-spin" />} Entrer <ChevronRight size={15} />
+          </button>
+        </form>
+        <p className="text-center text-xs mt-4" style={{ color: THEME.navySoft }}>
+          Demandez ce code à votre responsable si vous ne l'avez pas.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 /* ---------------- LOGIN ---------------- */
 function LoginScreen({ members, onCreateMember, onLogin, notify }) {

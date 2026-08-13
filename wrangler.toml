@@ -11,18 +11,10 @@ not_found_handling = "single-page-application"
 binding = "STORAGE_KV"
 id = "0dd4bdb5eaa345f190605693ea883e25"
 
-# APP_SECRET n'est pas un vrai secret : sa valeur finit de toute façon en
-# clair dans le bundle JS public via VITE_APP_SECRET (même valeur, à
-# définir côté dashboard Cloudflare comme variable de build). Sert
-# uniquement à fermer l'accès direct à l'API pour un visiteur non passé
-# par l'application — voir README > Sécurité.
-#
-# MANAGER_CODE, en revanche, N'EST JAMAIS envoyé au navigateur : il est
-# vérifié côté Worker (POST /api/verify-manager-code) et reste donc un
-# vrai secret côté serveur, contrairement à l'ancienne comparaison faite
-# directement dans le code client. Change cette valeur à volonté — les
-# comptes responsables déjà créés ne sont pas affectés (le code ne sert
-# qu'à la création/passage au rôle responsable).
-[vars]
-APP_SECRET = "3141ac7198c6187c079a95af77e482668952eacc1e1941b9"
-MANAGER_CODE = "RESPONSABLE2026"
+# Aucun secret ici : SITE_ACCESS_CODE, MANAGER_CODE et SESSION_SECRET sont
+# tous les trois vérifiés (ou utilisés pour signer) côté Worker et ne
+# doivent JAMAIS être présents en clair dans ce fichier — [vars] est un
+# fichier committé dans Git, donc public dès que le dépôt est cloné. Ils se
+# définissent avec `wrangler secret put <NOM>` (production) et, pour le
+# développement local (`wrangler dev`), dans un fichier `.dev.vars` — voir
+# `.dev.vars.example` et README > Sécurité.

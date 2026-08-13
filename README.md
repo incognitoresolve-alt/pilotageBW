@@ -6,7 +6,7 @@ Application de suivi commercial (assurances & crédits) pour une équipe : saisi
 
 ```bash
 npm install
-cp .env.example .env.local   # VITE_APP_SECRET, doit matcher APP_SECRET dans wrangler.toml
+cp .dev.vars.example .dev.vars   # SITE_ACCESS_CODE, MANAGER_CODE, SESSION_SECRET — voir Sécurité
 npm run worker:dev
 ```
 
@@ -54,18 +54,16 @@ Ce rafraîchissement est silencieux (pas de notification, sauf en cas d'échec) 
 
 ## Sécurité
 
-L'API (`/api/storage/*`) exige un header `X-App-Secret` correspondant à `APP_SECRET` — sans lui, impossible de lire ou d'écrire les données directement (curl, script, etc.) sans passer par l'application. Le frontend l'envoie automatiquement, sa valeur est injectée au build via la variable `VITE_APP_SECRET`.
+L'accès au site est protégé par un **code d'accès partagé** (`SITE_ACCESS_CODE`), demandé dès l'arrivée sur le site (avant même l'écran de connexion collaborateur/responsable). Contrairement à l'ancien mécanisme (`APP_SECRET`, envoyé au navigateur à chaque appel API et donc récupérable dans le bundle JS par quiconque inspecte le site), ce code n'est **jamais transmis au navigateur** : il est vérifié côté Worker (`POST /api/unlock`, comparaison à temps constant, tentatives limitées) qui délivre en échange un **jeton de session signé** (HMAC, `SESSION_SECRET`) — c'est ce jeton, opaque et sans rapport lisible avec le code, que le navigateur envoie ensuite sur chaque appel `/api/*` via l'en-tête `X-Session-Token`. Le jeton expire après 30 jours ; faire tourner `SESSION_SECRET` invalide instantanément tous les jetons déjà distribués (utile en cas de doute sur une fuite).
 
-⚠️ Ce n'est **pas** une authentification par utilisateur : la valeur finit dans le fichier JS envoyé au navigateur, donc quelqu'un qui inspecte le bundle peut la récupérer. Ça bloque l'accès direct et non authentifié à l'API pour un visiteur ou un robot qui tomberait sur l'URL, mais ce n'est pas une protection contre quelqu'un de déterminé — à n'utiliser que dans un cadre de confiance (équipe restreinte, URL non publicisée). La connexion collaborateur exige désormais un mot de passe personnel (voir "Mot de passe collaborateur" ci-dessous), qui empêche l'usurpation occasionnelle d'un profil par un collègue, mais ne remplace pas une vraie authentification côté infrastructure — la distinction responsable/collaborateur reste appliquée côté interface, pas par l'API elle-même (`/api/storage/*` ne connaît aucune notion de rôle). Pour une vraie protection, la prochaine étape recommandée est **Cloudflare Access** (Zero Trust, gratuit jusqu'à 50 utilisateurs) : il permet d'exiger une vérification d'e-mail avant que quiconque n'atteigne le site, y compris l'API — se configure entièrement depuis le dashboard Cloudflare (Zero Trust → Access → Applications), sans changement de code.
+⚠️ Ça reste un code **partagé par toute l'équipe**, pas une authentification individuelle : toute personne qui le connaît a accès au site depuis n'importe quel appareil. La connexion collaborateur exige en plus un mot de passe personnel (voir "Mot de passe collaborateur" ci-dessous), qui empêche l'usurpation d'un profil par un collègue une fois dans l'app, mais la distinction responsable/collaborateur reste appliquée côté interface, pas par l'API elle-même (`/api/storage/*` ne connaît aucune notion de rôle une fois le jeton de session validé). Pour une vraie authentification individuelle (un compte par personne, avant même d'atteindre le site), la prochaine étape recommandée reste **Cloudflare Access** (Zero Trust, gratuit jusqu'à 50 utilisateurs) — se configure entièrement depuis le dashboard Cloudflare (Cloudflare One → Contrôles Access → Applications), sans changement de code, et peut se combiner avec le code d'accès actuel plutôt que le remplacer.
 
 **Protections en place côté authentification collaborateur/responsable** :
 - Au rechargement de la page, la session restaurée depuis `localStorage` n'est jamais utilisée telle quelle : seul son `id` sert à retrouver le membre à jour côté serveur (rôle inclus) — modifier son `localStorage` ne permet donc pas de s'attribuer le rôle "responsable".
-- Les mots de passe sont hachés en PBKDF2-SHA256 salé (300 000 itérations pour tout nouveau mot de passe ; les mots de passe existants restent vérifiables à leur nombre d'itérations d'origine et sont mis à niveau au prochain changement), comparés à temps constant.
-- `login-member`, `verify-manager-code`, `set-password` et `reset-password` sont limités en tentatives (fenêtre de 15 minutes, par e-mail ou par IP selon l'endpoint) pour décourager le brute-force.
+- Les mots de passe sont hachés en PBKDF2-SHA256 salé (100 000 itérations — le plafond imposé par le runtime Cloudflare Workers, voir l'avertissement dans `worker/index.js`), comparés à temps constant.
+- `login-member`, `verify-manager-code`, `set-password`, `reset-password` et `unlock` sont tous limités en tentatives (fenêtre de 15 minutes, par e-mail ou par IP selon l'endpoint) pour décourager le brute-force.
 
-**`APP_SECRET` est défini directement dans `wrangler.toml`** (sous `[vars]`), pas via le dashboard Cloudflare. Ce choix vient d'un comportement observé sur ce projet : avec un déploiement Git-connecté exécutant `wrangler deploy`, les variables/secrets configurés dans le dashboard (que ce soit sous "Paramètres → Variables et secrets" ou sous "Liaisons") n'étaient jamais effectivement liés au Worker au moment du déploiement — seul `wrangler.toml` faisait foi (vérifiable dans les logs de build, qui listent "Your worker has access to the following bindings" et n'affichaient jamais `APP_SECRET`, contrairement à `STORAGE_KV` qui lui est déclaré dans `wrangler.toml`). Le mettre directement dans `wrangler.toml` élimine cette source d'échec — sans perte de confidentialité réelle puisque cette valeur est de toute façon publique côté client (voir ci-dessus).
-
-`VITE_APP_SECRET`, en revanche, reste une variable de **build**, configurée dans le dashboard Cloudflare (Paramètres → Variables et secrets) — elle doit avoir la **même valeur** que `APP_SECRET` dans `wrangler.toml`. Si tu changes l'une des deux, il faut changer l'autre pour qu'elles restent identiques, puis redéployer.
+**`SITE_ACCESS_CODE`, `MANAGER_CODE` et `SESSION_SECRET` ne doivent jamais apparaître dans `wrangler.toml`** (ni dans aucun fichier committé) : ce sont de vrais secrets, à définir avec `wrangler secret put <NOM>` (production) — voir "Déploiement" ci-dessous — ou dans un fichier `.dev.vars` local, gitignored (voir `.dev.vars.example`, à copier en `.dev.vars` pour développer). C'est différent de l'ancien `APP_SECRET`, qui n'a jamais été un vrai secret puisqu'il finissait de toute façon dans le bundle JS public — ça n'avait donc pas d'importance qu'il soit dans `wrangler.toml` (un fichier committé). Ce n'est plus le cas ici : ces trois valeurs ne quittent jamais le Worker.
 
 ## Déploiement sur Cloudflare
 
@@ -76,19 +74,23 @@ L'API (`/api/storage/*`) exige un header `X-App-Secret` correspondant à `APP_SE
    ```
    Copier l'`id` retourné dans `wrangler.toml` (remplace `REMPLACER_PAR_L_ID_DU_NAMESPACE_KV`).
 
-2. **Vérifier/changer le secret partagé** (voir section Sécurité ci-dessus) :
-   - `APP_SECRET` dans `wrangler.toml` — déjà défini, à changer si besoin (n'importe quelle chaîne aléatoire, ex. `openssl rand -hex 16`).
-   - `VITE_APP_SECRET` côté dashboard Cloudflare → le projet → **Paramètres** → **Variables et secrets** → variable (non chiffrée) avec la **même** valeur que `APP_SECRET` ci-dessus.
+2. **Définir les 3 secrets** (une seule fois, ou à chaque rotation) :
+   ```bash
+   npx wrangler secret put SITE_ACCESS_CODE   # le code demandé à l'écran de verrouillage
+   npx wrangler secret put MANAGER_CODE       # le code de passage au rôle "responsable"
+   npx wrangler secret put SESSION_SECRET     # ex. openssl rand -hex 32 — jamais deviné, jamais réutilisé ailleurs
+   ```
+   Ces commandes stockent chaque valeur chiffrée, liée au Worker, indépendamment des déploiements suivants (un `wrangler deploy` ne les efface pas). Si tu préfères la faire depuis le dashboard Cloudflare (le projet → **Paramètres** → **Variables et secrets**), choisis bien le type **Secret** (chiffré) et pas une simple variable texte — c'est cette distinction qui posait problème avec l'ancien `APP_SECRET` sur un déploiement Git-connecté (les variables texte du dashboard n'étaient pas fiables, voir logs de build "Your worker has access to the following bindings").
 
 3. **Déployer** :
    ```bash
    npm run deploy
    ```
-   Ceci build le frontend (`vite build`, en lisant `VITE_APP_SECRET` depuis l'environnement) puis publie le Worker + les assets via `wrangler deploy` (qui lit `APP_SECRET` depuis `wrangler.toml`).
+   Ceci build le frontend (`vite build` — plus aucun secret n'est nécessaire au build, contrairement à l'ancien `VITE_APP_SECRET`) puis publie le Worker + les assets via `wrangler deploy`.
 
-   Alternative recommandée pour les déploiements automatiques : connecter le repo GitHub à un projet **Workers** depuis le dashboard Cloudflare (Compute (Workers) → Create → Connect to Git). Cloudflare exécute `npm run build` puis `wrangler deploy` à chaque push — il faut juste avoir renseigné `VITE_APP_SECRET` comme à l'étape 2 (identique à `APP_SECRET` du `wrangler.toml` commité).
+   Alternative recommandée pour les déploiements automatiques : connecter le repo GitHub à un projet **Workers** depuis le dashboard Cloudflare (Compute (Workers) → Create → Connect to Git). Cloudflare exécute `npm run build` puis `wrangler deploy` à chaque push — les 3 secrets définis à l'étape 2 restent liés au Worker d'un déploiement à l'autre, aucune configuration supplémentaire n'est nécessaire côté build.
 
-   ⚠️ Si l'application se charge mais apparaît vide avec un bandeau rouge (l'API renvoie 401), le message affiché indique désormais la cause exacte (secret absent côté serveur, longueurs différentes, etc.) — voir `worker/index.js`.
+   ⚠️ Si l'application se charge mais que l'écran de verrouillage refuse systématiquement le bon code, vérifie que `SITE_ACCESS_CODE` est bien défini côté Worker (`npx wrangler secret list`) — un secret absent revient à un code toujours refusé plutôt qu'à un message d'erreur explicite.
 
 ## Export Excel
 
@@ -151,7 +153,7 @@ Pour **PAT** et **BPR**, la saisie du jour se scinde en **Papier** et **eDirect*
 ## Comptes
 
 - **Collaborateur** : la création d'un compte se fait uniquement par **invitation** — voir ci-dessous. À l'activation, le collaborateur choisit son propre **mot de passe** (6 caractères minimum) ; il se reconnecte ensuite par e-mail + mot de passe. Ceci empêche qu'un collaborateur se connecte sous l'identité d'un autre en tapant simplement son nom et son e-mail — voir "Mot de passe collaborateur" ci-dessous.
-- **Responsable** : nécessite le code d'accès, défini par `MANAGER_CODE` dans `wrangler.toml` (à personnaliser avant mise en production). Contrairement à `APP_SECRET`, ce code est vérifié côté Worker (`POST /api/verify-manager-code`) et n'est **jamais envoyé au navigateur** — sa valeur reste un vrai secret, invisible dans le bundle JS public.
+- **Responsable** : nécessite le code d'accès, défini par le secret `MANAGER_CODE` (`wrangler secret put MANAGER_CODE`, voir Sécurité). Ce code est vérifié côté Worker (`POST /api/verify-manager-code`) et n'est **jamais envoyé au navigateur** — sa valeur reste un vrai secret, invisible dans le bundle JS public. Différent du code d'accès au site (`SITE_ACCESS_CODE`) : le premier ouvre le site à toute l'équipe, celui-ci fait passer un compte au rôle "responsable".
 
 ## Mot de passe collaborateur
 
