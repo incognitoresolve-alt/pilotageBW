@@ -201,8 +201,6 @@ function computeMemberMetrics(member, entries, monthFigures, creditRecords, view
   const objM = member.objectifMontant ?? 5000;
   const declared = entries.filter((e) => e.personId === member.id && e.date.slice(0, 7) === viewMonth);
   const todayForMember = entries.filter((e) => e.personId === member.id && e.date === todayISO());
-  const montantRealise = declared.reduce((s, e) => s + (e.montant || 0), 0);
-  const resteM = Math.max(0, objM - montantRealise);
   const assuranceRealiseParType = Object.fromEntries(
     ASSURANCE_TYPES.map((at) => [
       at,
@@ -218,6 +216,16 @@ function computeMemberMetrics(member, entries, monthFigures, creditRecords, view
   // toujours à 0 dès qu'un montant significatif était saisi, quel que soit
   // le nombre réel de dossiers financés. Comparaison nombre contre nombre.
   const resteC = Math.max(0, objC - creditCountTotal);
+  // "Montant vendu" reflète le montant OFFICIEL des crédits financés
+  // (creditTotal, validé par le responsable via "Crédits financés — saisie
+  // du jour"), pas les ventes de crédit auto-déclarées par le collaborateur
+  // dans "Ma saisie" : cohérent avec "Crédits (total)" et le Classement, qui
+  // utilisent déjà exclusivement creditRecords comme source officielle (voir
+  // README > Crédits financés). Les entrées "Ma saisie" de type crédit
+  // restent visibles dans le Journal pour le suivi personnel du
+  // collaborateur, mais ne comptent plus en double vers cet objectif.
+  const montantRealise = creditTotal;
+  const resteM = Math.max(0, objM - montantRealise);
   const assuranceRealise = ASSURANCE_TYPES.reduce((s, at) => s + (assuranceRealiseParType[at] || 0), 0);
   const resteA = Math.max(0, objA - assuranceRealise);
   const objectifsAssuranceParType = member.objectifsAssuranceParType || {};
@@ -1315,6 +1323,7 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
             <div
               className="px-5 py-2.5 flex items-center gap-x-5 gap-y-1 flex-wrap text-xs max-w-5xl mx-auto"
               style={{ color: THEME.navySoft }}
+              title="Cumul de toute l'équipe — la somme des objectifs individuels de chaque collaborateur, pas la même valeur que le champ 'Objectifs généraux' ci-dessous (qui s'applique par personne)"
             >
               {teamOverview.lateCount > 0 && (
                 <span className="font-semibold flex items-center gap-1" style={{ color: THEME.red }}>
@@ -1322,10 +1331,10 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
                 </span>
               )}
               <span>
-                <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.assuranceRealise}</span> assur. / obj. {teamOverview.assuranceObjectif}
+                <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.assuranceRealise}</span> assur. / obj. {teamOverview.assuranceObjectif} <span className="opacity-60">(cumul équipe)</span>
               </span>
               <span>
-                <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.creditCountTotal}</span> créd. / obj. {teamOverview.creditObjectif}
+                <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.creditCountTotal}</span> créd. / obj. {teamOverview.creditObjectif} <span className="opacity-60">(cumul équipe)</span>
               </span>
               <span>
                 <span className="font-semibold" style={{ color: THEME.navy }}>{formatEUR(teamOverview.montantRealise)}</span> vendus ce mois
@@ -2847,7 +2856,7 @@ function MemberDetailCard({
         />
         <ProgressBlock
           icon={CreditCard}
-          label="Crédits (total)"
+          label="Crédits (contrats)"
           value={creditCountTotal}
           objective={objC}
           reste={resteC}
