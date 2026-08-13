@@ -190,15 +190,39 @@ function creditCountParTypeFor(creditRecords, memberId, monthKey) {
   );
 }
 
+// Objectif applicable à un membre pour un mois donné : les objectifs d'un
+// collaborateur (globaux + par produit) sont désormais historisés par mois
+// (member.objectifsHistory[monthKey]) à chaque sauvegarde depuis "Suivi &
+// objectifs" — sans ça, consulter un mois archivé appliquait l'objectif
+// ACTUEL plutôt que celui réellement fixé à l'époque, faussant
+// rétroactivement le jugement porté sur les mois passés ("reste", statut
+// "à jour"/"en retard", "Objectif atteint" par produit). Résolution : le
+// snapshot le plus récent dont la clé est <= viewMonth (comparaison de
+// chaînes "AAAA-MM", triable lexicalement) ; à défaut (mois antérieur au
+// tout premier snapshot jamais enregistré, ou fonctionnalité pas encore
+// utilisée pour ce membre), repli sur les champs "courants" du membre —
+// jamais rien perdu, comportement identique à avant pour les mois déjà
+// hors de portée de l'historique.
+function resolveObjectivesForMonth(member, viewMonth) {
+  const hist = member.objectifsHistory || {};
+  const keys = Object.keys(hist).filter((k) => k <= viewMonth).sort();
+  const snap = keys.length ? hist[keys[keys.length - 1]] : null;
+  return {
+    objA: snap ? snap.objectifAssurance ?? 5 : member.objectifAssurance ?? 5,
+    objC: snap ? snap.objectifCredit ?? 5 : member.objectifCredit ?? 5,
+    objM: snap ? snap.objectifMontant ?? 5000 : member.objectifMontant ?? 5000,
+    objectifsAssuranceParType: (snap ? snap.objectifsAssuranceParType : member.objectifsAssuranceParType) || {},
+    objectifsCreditParType: (snap ? snap.objectifsCreditParType : member.objectifsCreditParType) || {},
+  };
+}
+
 // Calcule tous les chiffres du mois pour un collaborateur (réalisé et
 // objectifs, tous produits confondus) — factorisé pour être utilisé à la
 // fois par la vue d'ensemble compacte (statut de rythme) et par la carte
 // détaillée d'un collaborateur, sans dupliquer la logique.
 function computeMemberMetrics(member, entries, monthFigures, creditRecords, viewMonth) {
   const f = monthFigures[member.id] || emptyFigures();
-  const objA = member.objectifAssurance ?? 5;
-  const objC = member.objectifCredit ?? 5;
-  const objM = member.objectifMontant ?? 5000;
+  const { objA, objC, objM, objectifsAssuranceParType, objectifsCreditParType } = resolveObjectivesForMonth(member, viewMonth);
   const declared = entries.filter((e) => e.personId === member.id && e.date.slice(0, 7) === viewMonth);
   const todayForMember = entries.filter((e) => e.personId === member.id && e.date === todayISO());
   const assuranceRealiseParType = Object.fromEntries(
@@ -228,8 +252,6 @@ function computeMemberMetrics(member, entries, monthFigures, creditRecords, view
   const resteM = Math.max(0, objM - montantRealise);
   const assuranceRealise = ASSURANCE_TYPES.reduce((s, at) => s + (assuranceRealiseParType[at] || 0), 0);
   const resteA = Math.max(0, objA - assuranceRealise);
-  const objectifsAssuranceParType = member.objectifsAssuranceParType || {};
-  const objectifsCreditParType = member.objectifsCreditParType || {};
   const hasProduitObjectifs =
     ASSURANCE_TYPES.some((at) => objectifsAssuranceParType[at] > 0) ||
     CREDIT_TYPES.some((ct) => objectifsCreditParType[ct] > 0);
@@ -1474,6 +1496,16 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
 
   const needsContractMode = type === "credit" && CONTRACT_MODE_CREDIT_TYPES.includes(creditType);
 
+  // Avertissement non bloquant (pas de contrainte d'unicité côté serveur) :
+  // un numéro de dossier identique existe déjà, tous collaborateurs et
+  // mois confondus — le plus souvent une faute de frappe ou une saisie en
+  // double, à vérifier avant de valider quand même.
+  const duplicateDossier = useMemo(() => {
+    const key = dossier.trim().toLowerCase();
+    if (!key) return null;
+    return entries.find((e) => e.id !== editingEntryId && e.dossier.trim().toLowerCase() === key) || null;
+  }, [dossier, entries, editingEntryId]);
+
   const myEntries = useMemo(
     () =>
       entries
@@ -1519,6 +1551,14 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
     }
     if (type === "credit" && (!Number.isFinite(Number(montant)) || Number(montant) <= 0)) {
       return notify("Indiquez un montant supérieur à 0.", true);
+    }
+    // Une vente ne peut être déclarée que dans le mois en cours (pas dans le
+    // futur, ni dans un mois déjà archivé) — un chiffre déjà clos ne doit
+    // plus pouvoir être modifié rétroactivement en douce. Le sélecteur de
+    // date pose déjà min/max ; cette vérification couvre une saisie clavier
+    // qui contournerait ces bornes.
+    if (date < `${mKey}-01` || date > todayISO()) {
+      return notify("La date doit être comprise dans le mois en cours.", true);
     }
     setSubmitting(true);
     const entryData = {
@@ -1660,6 +1700,13 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
               className="w-full px-3.5 py-2.5 rounded-lg text-sm"
               style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
             />
+            {duplicateDossier && (
+              <p className="text-xs mt-1.5 flex items-start gap-1.5" style={{ color: THEME.amber }}>
+                <AlertCircle size={13} className="flex-shrink-0 mt-0.5" />
+                Ce numéro de dossier existe déjà — déclaré par {duplicateDossier.personName} le{" "}
+                {new Date(duplicateDossier.date + "T00:00:00").toLocaleDateString("fr-FR")}. Vérifiez qu'il ne s'agit pas d'un doublon avant d'enregistrer.
+              </p>
+            )}
           </Field>
 
           {type === "assurance" ? (
@@ -1701,6 +1748,8 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
             <input
               type="date"
               value={date}
+              min={`${mKey}-01`}
+              max={todayISO()}
               onChange={(e) => setDate(e.target.value)}
               className="w-full px-3.5 py-2.5 rounded-lg text-sm"
               style={{ border: `1px solid ${THEME.line}`, background: "#FAFBFC" }}
@@ -2175,16 +2224,31 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
   const applyGeneralObjectives = async () => {
     if (saving) return;
     setSaving(true);
-    const updated = members.map((m) =>
-      m.role === "collaborateur"
-        ? {
-            ...m,
-            objectifAssurance: Number(generalObj.objectifAssurance) || 0,
-            objectifCredit: Number(generalObj.objectifCredit) || 0,
-            objectifMontant: Number(generalObj.objectifMontant) || 0,
-          }
-        : m
-    );
+    const updated = members.map((m) => {
+      if (m.role !== "collaborateur") return m;
+      const objectifAssurance = Number(generalObj.objectifAssurance) || 0;
+      const objectifCredit = Number(generalObj.objectifCredit) || 0;
+      const objectifMontant = Number(generalObj.objectifMontant) || 0;
+      return {
+        ...m,
+        objectifAssurance,
+        objectifCredit,
+        objectifMontant,
+        // Historise l'objectif appliqué au mois en cours (mKey, jamais
+        // viewMonth) — voir resolveObjectivesForMonth : sans ça, ce
+        // changement s'appliquerait rétroactivement à tous les mois déjà
+        // archivés consultés depuis "Suivi & objectifs".
+        objectifsHistory: {
+          ...(m.objectifsHistory || {}),
+          [mKey]: {
+            ...(m.objectifsHistory?.[mKey] || {}),
+            objectifAssurance,
+            objectifCredit,
+            objectifMontant,
+          },
+        },
+      };
+    });
     const ok = await setMembers(updated);
     if (ok) notify(`Objectifs généraux appliqués à ${collaborators.length} collaborateur(s).`);
     setSaving(false);
@@ -2211,14 +2275,19 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
 
   const startEdit = (member) => {
     setEditing(member.id);
+    // On édite toujours l'objectif du mois EN COURS (mKey), jamais celui
+    // d'un mois archivé consulté via viewMonth — resolveObjectivesForMonth
+    // renvoie le snapshot le plus récent applicable à mKey, ou les champs
+    // "courants" du membre à défaut (voir sa définition).
+    const current = resolveObjectivesForMonth(member, mKey);
     setObjDraft({
-      objectifAssurance: member.objectifAssurance ?? 5,
-      objectifCredit: member.objectifCredit ?? 5,
-      objectifMontant: member.objectifMontant ?? 5000,
+      objectifAssurance: current.objA,
+      objectifCredit: current.objC,
+      objectifMontant: current.objM,
     });
     setObjByTypeDraft({
-      assurance: { ...emptyObjByType().assurance, ...(member.objectifsAssuranceParType || {}) },
-      credit: { ...emptyObjByType().credit, ...(member.objectifsCreditParType || {}) },
+      assurance: { ...emptyObjByType().assurance, ...current.objectifsAssuranceParType },
+      credit: { ...emptyObjByType().credit, ...current.objectifsCreditParType },
     });
     const d = todayISO();
     setCreditDate(d);
@@ -2233,16 +2302,33 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
   const saveEdit = async (member) => {
     if (saving) return;
     setSaving(true);
+    const objectifAssurance = Number(objDraft.objectifAssurance) || 0;
+    const objectifCredit = Number(objDraft.objectifCredit) || 0;
+    const objectifMontant = Number(objDraft.objectifMontant) || 0;
     const ok = await setMembers(
       members.map((m) =>
         m.id === member.id
           ? {
               ...m,
-              objectifAssurance: Number(objDraft.objectifAssurance) || 0,
-              objectifCredit: Number(objDraft.objectifCredit) || 0,
-              objectifMontant: Number(objDraft.objectifMontant) || 0,
+              objectifAssurance,
+              objectifCredit,
+              objectifMontant,
               objectifsAssuranceParType: objByTypeDraft.assurance,
               objectifsCreditParType: objByTypeDraft.credit,
+              // Historise l'objectif appliqué au mois en cours (mKey) — voir
+              // resolveObjectivesForMonth / applyGeneralObjectives : un mois
+              // déjà archivé garde le statut évalué avec l'objectif qui
+              // était réellement en vigueur à l'époque.
+              objectifsHistory: {
+                ...(m.objectifsHistory || {}),
+                [mKey]: {
+                  objectifAssurance,
+                  objectifCredit,
+                  objectifMontant,
+                  objectifsAssuranceParType: objByTypeDraft.assurance,
+                  objectifsCreditParType: objByTypeDraft.credit,
+                },
+              },
             }
           : m
       )
@@ -2261,6 +2347,13 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
   // eDirect), les autres types un seul.
   const saveCreditRecords = async (member) => {
     if (saving) return;
+    // Un chiffre déjà clos ne doit plus pouvoir être modifié rétroactivement
+    // en douce — le sélecteur de date pose déjà min/max (mois en cours),
+    // cette vérification couvre une saisie clavier qui les contournerait.
+    if (creditDate < `${mKey}-01` || creditDate > todayISO()) {
+      notify("La date doit être comprise dans le mois en cours.", true);
+      return;
+    }
     setSaving(true);
     const others = creditRecords.filter((r) => !(r.memberId === member.id && r.date === creditDate));
     const baseRecord = {
@@ -2367,17 +2460,20 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
       const assuranceTotal = declared
         .filter((e) => e.type === "assurance")
         .reduce((s, e) => s + (e.quantite || 1), 0);
+      // Objectif tel qu'il était réellement fixé pour le mois exporté (pas
+      // l'objectif courant) — voir resolveObjectivesForMonth.
+      const { objA, objC, objM } = resolveObjectivesForMonth(m, viewMonth);
       return {
         "Collaborateur": m.name,
         "E-mail": m.email,
         "Assurances": assuranceTotal,
-        "Objectif assurances": m.objectifAssurance ?? 5,
+        "Objectif assurances": objA,
         ...Object.fromEntries(CREDIT_TYPES.map((ct) => [`${ct} (montant €)`, creditParType[ct] || 0])),
         ...Object.fromEntries(CREDIT_TYPES.map((ct) => [`${ct} (nombre)`, creditCountParType[ct] || 0])),
         "Total crédits (montant €)": creditTotal,
-        "Objectif crédits": m.objectifCredit ?? 5,
+        "Objectif crédits": objC,
         "Montant vendu (journal assurances)": montantTotal,
-        "Objectif montant (€)": m.objectifMontant ?? 5000,
+        "Objectif montant (€)": objM,
         "Dossiers déclarés (journal)": declared.length,
       };
     });
@@ -2611,6 +2707,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
               member={selectedMember}
               session={session}
               isManager={isManager}
+              mKey={mKey}
               viewMonth={viewMonth}
               isCurrentMonth={isCurrentMonth}
               entries={entries}
@@ -2646,6 +2743,7 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
             member={member}
             session={session}
             isManager={isManager}
+            mKey={mKey}
             viewMonth={viewMonth}
             isCurrentMonth={isCurrentMonth}
             entries={entries}
@@ -2780,7 +2878,7 @@ function ResetPasswordControl({ member, notify, compact = false }) {
 // dans la vue d'ensemble), toujours affiché directement côté collaborateur
 // (qui ne voit que son propre profil).
 function MemberDetailCard({
-  member, session, isManager, viewMonth, isCurrentMonth, entries, monthFigures, creditRecords,
+  member, session, isManager, mKey, viewMonth, isCurrentMonth, entries, monthFigures, creditRecords,
   editingId, setEditing, objDraft, setObjDraft, objByTypeDraft, setObjByTypeDraft,
   creditDate, creditDraft, setCreditDraft, startEdit, changeCreditDate, saveEdit, saveCreditRecords, saving,
   notify, setTab,
@@ -2950,6 +3048,8 @@ function MemberDetailCard({
               <input
                 type="date"
                 value={creditDate}
+                min={`${mKey}-01`}
+                max={todayISO()}
                 onChange={(e) => changeCreditDate(member, e.target.value)}
                 className="w-full px-3 py-2 rounded-lg text-sm"
                 style={{ border: `1px solid ${THEME.line}`, background: THEME.card }}
