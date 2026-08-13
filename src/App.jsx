@@ -1470,7 +1470,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
   const [date, setDate] = useState(todayISO());
   const [editingEntryId, setEditingEntryId] = useState(null);
   const [submitting, setSubmitting] = useState(false);
-  const [showTodaySales, setShowTodaySales] = useState(true);
+  const [showTodaySales, setShowTodaySales] = useState(false);
 
   const needsContractMode = type === "credit" && CONTRACT_MODE_CREDIT_TYPES.includes(creditType);
 
