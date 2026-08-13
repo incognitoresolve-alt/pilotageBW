@@ -1,0 +1,38 @@
+name: Déployer sur Cloudflare Workers
+
+# Se déclenche à chaque push sur la branche de production, et peut aussi
+# être lancé manuellement depuis l'onglet "Actions" de GitHub (bouton
+# "Run workflow") — utile pour forcer un redéploiement sans repousser de
+# commit, par exemple après avoir changé un secret côté Cloudflare.
+on:
+  push:
+    branches:
+      - claude/rendle-projet-fonctionnel-7x691w
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build du frontend
+        run: npm run build
+
+      # Publie le Worker + les assets statiques (dist/). Ne touche jamais
+      # aux secrets (SITE_ACCESS_CODE, MANAGER_CODE, SESSION_SECRET) :
+      # ceux-ci restent tels que définis via `wrangler secret put` ou le
+      # dashboard Cloudflare, un déploiement ne les réinitialise pas.
+      - name: Déployer le Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: deploy
