@@ -1470,6 +1470,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
   const [date, setDate] = useState(todayISO());
   const [editingEntryId, setEditingEntryId] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showTodaySales, setShowTodaySales] = useState(true);
 
   const needsContractMode = type === "credit" && CONTRACT_MODE_CREDIT_TYPES.includes(creditType);
 
@@ -1746,7 +1747,22 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
 
         <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
           <div className="flex items-center justify-between mb-3 gap-2">
-            <h2 className="text-sm font-semibold">Mes ventes du jour</h2>
+            <button
+              type="button"
+              onClick={() => setShowTodaySales((v) => !v)}
+              className="flex items-center gap-1.5 min-w-0"
+            >
+              <ChevronRight size={14} style={{ color: THEME.navySoft, transform: showTodaySales ? "rotate(90deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
+              <h2 className="text-sm font-semibold">Mes ventes du jour</h2>
+              {todayEntries.length > 0 && (
+                <span
+                  className="text-xs font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0"
+                  style={{ background: THEME.bg, color: THEME.navySoft }}
+                >
+                  {todayEntries.length}
+                </span>
+              )}
+            </button>
             <button
               onClick={() => setTab("journal")}
               className="text-xs font-medium flex items-center gap-1 flex-shrink-0"
@@ -1755,53 +1771,57 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
               Voir le journal complet <ChevronRight size={13} />
             </button>
           </div>
-          <div className="mb-4">
-            <RecapGrid entries={todayEntries} showAssurance creditTitle="Vente en instance" />
-          </div>
-          {todayEntries.length === 0 ? (
-            <p className="text-sm py-6 text-center" style={{ color: THEME.navySoft }}>
-              Aucune vente déclarée aujourd'hui.
-            </p>
-          ) : (
-            <div className="space-y-2">
-              {todayEntries.map((e) => (
-                <div
-                  key={e.id}
-                  className="flex items-center justify-between px-3 py-2.5 rounded-lg text-sm"
-                  style={{ background: THEME.bg }}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    {e.type === "assurance" ? (
-                      <Shield size={15} style={{ color: THEME.teal, flexShrink: 0 }} />
-                    ) : (
-                      <CreditCard size={15} style={{ color: THEME.amber, flexShrink: 0 }} />
-                    )}
-                    <div className="min-w-0">
-                      <div className="font-medium truncate">
-                        {e.type === "assurance" ? `Assurance ${e.assuranceType}` : creditLabel(e)} — {e.dossier}
+          {showTodaySales && (
+            <>
+              <div className="mb-4">
+                <RecapGrid entries={todayEntries} showAssurance creditTitle="Vente en instance" />
+              </div>
+              {todayEntries.length === 0 ? (
+                <p className="text-sm py-6 text-center" style={{ color: THEME.navySoft }}>
+                  Aucune vente déclarée aujourd'hui.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {todayEntries.map((e) => (
+                    <div
+                      key={e.id}
+                      className="flex items-center justify-between px-3 py-2.5 rounded-lg text-sm"
+                      style={{ background: THEME.bg }}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {e.type === "assurance" ? (
+                          <Shield size={15} style={{ color: THEME.teal, flexShrink: 0 }} />
+                        ) : (
+                          <CreditCard size={15} style={{ color: THEME.amber, flexShrink: 0 }} />
+                        )}
+                        <div className="min-w-0">
+                          <div className="font-medium truncate">
+                            {e.type === "assurance" ? `Assurance ${e.assuranceType}` : creditLabel(e)} — {e.dossier}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="font-medium" style={{ color: THEME.navy }}>
+                          {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
+                        </span>
+                        <button
+                          onClick={() => startEditEntry(e)}
+                          className="p-2 rounded-md flex-shrink-0"
+                          aria-label="Modifier"
+                        >
+                          <Pencil size={14} style={{ color: THEME.navySoft }} />
+                        </button>
+                        <ConfirmActionButton onConfirm={() => remove(e.id)} label="Supprimer" />
                       </div>
                     </div>
-                  </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <span className="font-medium" style={{ color: THEME.navy }}>
-                      {e.type === "assurance" ? `× ${e.quantite || 1}` : formatEUR(e.montant)}
-                    </span>
-                    <button
-                      onClick={() => startEditEntry(e)}
-                      className="p-2 rounded-md flex-shrink-0"
-                      aria-label="Modifier"
-                    >
-                      <Pencil size={14} style={{ color: THEME.navySoft }} />
-                    </button>
-                    <ConfirmActionButton onConfirm={() => remove(e.id)} label="Supprimer" />
-                  </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )}
+              <p className="text-xs mt-3 flex items-center gap-1.5" style={{ color: THEME.navySoft }}>
+                <AlertCircle size={12} /> Ces déclarations servent de journal. Les chiffres officiels sont validés par le responsable.
+              </p>
+            </>
           )}
-          <p className="text-xs mt-3 flex items-center gap-1.5" style={{ color: THEME.navySoft }}>
-            <AlertCircle size={12} /> Ces déclarations servent de journal. Les chiffres officiels sont validés par le responsable.
-          </p>
         </div>
       </div>
     </div>
