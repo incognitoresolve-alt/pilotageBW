@@ -1218,6 +1218,19 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
   }, [isManager, members, entries, figures, creditRecords, mKey]);
   const pendingInvitesCount = useMemo(() => invites.filter((i) => !i.used).length, [invites]);
 
+  // Mode focus : quand le responsable édite un collaborateur dans "Suivi &
+  // objectifs", le bandeau "coup d'œil" et les onglets de navigation se
+  // regroupent dans une barre flottante compacte (nom du collaborateur +
+  // sortie), pour concentrer l'écran sur la saisie plutôt que sur la
+  // navigation. Remonté ici (plutôt que gardé local à SuiviTab) pour que
+  // MainApp puisse aussi masquer sa propre nav le temps de l'édition.
+  const [editingMemberId, setEditingMemberId] = useState(null);
+  useEffect(() => {
+    if (tab !== "suivi") setEditingMemberId(null);
+  }, [tab]);
+  const focusMode = tab === "suivi" && !!editingMemberId;
+  const editingMember = focusMode ? members.find((m) => m.id === editingMemberId) : null;
+
   return (
     <div>
       <header
@@ -1272,52 +1285,80 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
         </div>
       </header>
 
-      {teamOverview && (
+      {focusMode ? (
+        // Mode focus (édition d'un collaborateur) : la nav, le bandeau
+        // "coup d'œil" et les panneaux "Objectifs généraux"/"Vue
+        // d'ensemble" (masqués côté SuiviTab) se regroupent ici dans une
+        // barre compacte et collante — l'écran reste concentré sur la
+        // saisie, avec juste un rappel du contexte et une sortie rapide.
         <div
-          className="px-5 py-2.5 flex items-center gap-x-5 gap-y-1 flex-wrap text-xs max-w-5xl mx-auto"
-          style={{ color: THEME.navySoft }}
+          className="sticky top-[65px] z-10 px-5 py-2.5 flex items-center justify-between gap-3 max-w-5xl mx-auto w-full"
+          style={{ background: MANAGER_ACCENT_SOFT, borderBottom: `1px solid ${MANAGER_ACCENT}30` }}
         >
-          {teamOverview.lateCount > 0 && (
-            <span className="font-semibold flex items-center gap-1" style={{ color: THEME.red }}>
-              <AlertCircle size={12} /> {teamOverview.lateCount} en retard
+          <div className="flex items-center gap-2 text-sm min-w-0">
+            <Pencil size={14} style={{ color: MANAGER_ACCENT, flexShrink: 0 }} />
+            <span className="font-semibold truncate" style={{ color: MANAGER_ACCENT }}>
+              Édition — {editingMember?.name}
             </span>
-          )}
-          <span>
-            <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.assuranceRealise}</span> assur. / obj. {teamOverview.assuranceObjectif}
-          </span>
-          <span>
-            <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.creditCountTotal}</span> créd. / obj. {teamOverview.creditObjectif}
-          </span>
-          <span>
-            <span className="font-semibold" style={{ color: THEME.navy }}>{formatEUR(teamOverview.montantRealise)}</span> vendus ce mois
-          </span>
+          </div>
+          <button
+            onClick={() => setEditingMemberId(null)}
+            className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg flex-shrink-0"
+            style={{ background: MANAGER_ACCENT, color: "#fff" }}
+          >
+            <X size={13} /> Fermer
+          </button>
         </div>
-      )}
+      ) : (
+        <>
+          {teamOverview && (
+            <div
+              className="px-5 py-2.5 flex items-center gap-x-5 gap-y-1 flex-wrap text-xs max-w-5xl mx-auto"
+              style={{ color: THEME.navySoft }}
+            >
+              {teamOverview.lateCount > 0 && (
+                <span className="font-semibold flex items-center gap-1" style={{ color: THEME.red }}>
+                  <AlertCircle size={12} /> {teamOverview.lateCount} en retard
+                </span>
+              )}
+              <span>
+                <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.assuranceRealise}</span> assur. / obj. {teamOverview.assuranceObjectif}
+              </span>
+              <span>
+                <span className="font-semibold" style={{ color: THEME.navy }}>{teamOverview.creditCountTotal}</span> créd. / obj. {teamOverview.creditObjectif}
+              </span>
+              <span>
+                <span className="font-semibold" style={{ color: THEME.navy }}>{formatEUR(teamOverview.montantRealise)}</span> vendus ce mois
+              </span>
+            </div>
+          )}
 
-      <nav className="flex gap-1 px-5 pt-4 max-w-5xl mx-auto overflow-x-auto sc-scroll-x">
-        <TabButton active={tab === "saisie"} onClick={() => setTab("saisie")} icon={ClipboardList} accent={accent}>
-          Ma saisie
-        </TabButton>
-        <TabButton active={tab === "journal"} onClick={() => setTab("journal")} icon={Calendar} accent={accent}>
-          Journal
-        </TabButton>
-        <TabButton active={tab === "suivi"} onClick={() => setTab("suivi")} icon={Award} accent={accent} badge={teamOverview?.lateCount || 0}>
-          Suivi & objectifs
-        </TabButton>
-        <TabButton active={tab === "classement"} onClick={() => setTab("classement")} icon={Trophy} accent={accent}>
-          Classement
-        </TabButton>
-        {isManager && (
-          <TabButton active={tab === "equipe"} onClick={() => setTab("equipe")} icon={Users} accent={accent} badge={pendingInvitesCount}>
-            Équipe
-          </TabButton>
-        )}
-        {isManager && (
-          <TabButton active={tab === "historique"} onClick={() => setTab("historique")} icon={History} accent={accent}>
-            Historique
-          </TabButton>
-        )}
-      </nav>
+          <nav className="flex gap-1 px-5 pt-4 max-w-5xl mx-auto overflow-x-auto sc-scroll-x">
+            <TabButton active={tab === "saisie"} onClick={() => setTab("saisie")} icon={ClipboardList} accent={accent}>
+              Ma saisie
+            </TabButton>
+            <TabButton active={tab === "journal"} onClick={() => setTab("journal")} icon={Calendar} accent={accent}>
+              Journal
+            </TabButton>
+            <TabButton active={tab === "suivi"} onClick={() => setTab("suivi")} icon={Award} accent={accent} badge={teamOverview?.lateCount || 0}>
+              Suivi & objectifs
+            </TabButton>
+            <TabButton active={tab === "classement"} onClick={() => setTab("classement")} icon={Trophy} accent={accent}>
+              Classement
+            </TabButton>
+            {isManager && (
+              <TabButton active={tab === "equipe"} onClick={() => setTab("equipe")} icon={Users} accent={accent} badge={pendingInvitesCount}>
+                Équipe
+              </TabButton>
+            )}
+            {isManager && (
+              <TabButton active={tab === "historique"} onClick={() => setTab("historique")} icon={History} accent={accent}>
+                Historique
+              </TabButton>
+            )}
+          </nav>
+        </>
+      )}
 
       <main key={tab} className="sc-fade-in max-w-5xl mx-auto px-5 pb-16 pt-5">
         {tab === "saisie" && (
@@ -1355,6 +1396,8 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
             mKey={mKey}
             notify={notify}
             isManager={isManager}
+            editing={editingMemberId}
+            setEditing={setEditingMemberId}
           />
         )}
         {tab === "classement" && (
@@ -2072,14 +2115,17 @@ function StatCard({ icon: Icon, label, value, color }) {
 }
 
 /* ---------------- SUIVI TAB ---------------- */
-function SuiviTab({ session, members, setMembers, entries, figures, creditRecords, setCreditRecords, mKey, notify, isManager, setTab }) {
+function SuiviTab({ session, members, setMembers, entries, figures, creditRecords, setCreditRecords, mKey, notify, isManager, setTab, editing, setEditing }) {
   const collaborators = members.filter((m) => m.role === "collaborateur");
   const [viewMonth, setViewMonth] = useState(mKey);
   const isCurrentMonth = viewMonth === mKey;
   const monthFigures = figures[viewMonth] || {};
   const daysLeft = daysLeftInMonth();
 
-  const [editing, setEditing] = useState(null); // memberId being edited by manager
+  // `editing` (memberId en cours d'édition, ou null) et son setter viennent
+  // de MainApp : remontés pour que la nav/le bandeau puissent aussi se
+  // regrouper dans la barre flottante pendant l'édition (voir MainApp >
+  // focusMode) — SuiviTab n'a plus besoin de son propre état local ici.
   const [objDraft, setObjDraft] = useState({ objectifAssurance: 0, objectifCredit: 0, objectifMontant: 0 });
   const [objByTypeDraft, setObjByTypeDraft] = useState(emptyObjByType());
   const [generalObj, setGeneralObj] = useState({ objectifAssurance: 5, objectifCredit: 5, objectifMontant: 5000 });
@@ -2316,6 +2362,12 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
 
   return (
     <div className="space-y-5">
+      {/* Masqués pendant l'édition d'un collaborateur (regroupés dans la
+          barre flottante de MainApp à la place — voir focusMode) : la
+          navigation par mois / export, "Objectifs généraux" et "Vue
+          d'ensemble" n'apportent rien pendant qu'on remplit une fiche. */}
+      {!editing && (
+      <>
       <div className="rounded-2xl p-4 flex items-center justify-between gap-3 flex-wrap" style={{ background: THEME.navy, color: "#fff" }}>
         <div className="flex items-center gap-2">
           <button
@@ -2514,6 +2566,8 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
             )
           )}
         </div>
+      )}
+      </>
       )}
 
       {isManager ? (
