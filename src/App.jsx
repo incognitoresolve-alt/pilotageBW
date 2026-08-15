@@ -262,9 +262,9 @@ function computeMemberMetrics(member, entries, monthFigures, creditRecords, view
   // "Montant vendu" reflète le montant OFFICIEL des crédits financés
   // (creditTotal, validé par le responsable via "Crédits financés — saisie
   // du jour"), pas les ventes de crédit auto-déclarées par le collaborateur
-  // dans "Ma saisie" : cohérent avec "Crédits (total)" et le Classement, qui
-  // utilisent déjà exclusivement creditRecords comme source officielle (voir
-  // README > Crédits financés). Les entrées "Ma saisie" de type crédit
+  // dans "Ma saisie" : cohérent avec "Crédits (contrats)" et le Classement,
+  // qui utilisent déjà exclusivement creditRecords comme source officielle
+  // (voir README > Crédits financés). Les entrées "Ma saisie" de type crédit
   // restent visibles dans le Journal pour le suivi personnel du
   // collaborateur, mais ne comptent plus en double vers cet objectif.
   const montantRealise = creditTotal;
@@ -2627,10 +2627,10 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
       const creditParType = creditRealiseParTypeFor(f, creditRecords, m.id, viewMonth);
       const creditCountParType = creditCountParTypeFor(creditRecords, m.id, viewMonth);
       const creditTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditParType[ct] || 0), 0);
+      const creditCountTotal = CREDIT_TYPES.reduce((s, ct) => s + (creditCountParType[ct] || 0), 0);
       const declared = entries.filter(
         (e) => e.personId === m.id && e.date.slice(0, 7) === viewMonth
       );
-      const montantTotal = declared.reduce((s, e) => s + (e.montant || 0), 0);
       const assuranceTotal = declared
         .filter((e) => e.type === "assurance")
         .reduce((s, e) => s + (e.quantite || 1), 0);
@@ -2645,10 +2645,10 @@ function SuiviTab({ session, members, setMembers, entries, figures, creditRecord
         ...Object.fromEntries(CREDIT_TYPES.map((ct) => [`${ct} (montant €)`, creditParType[ct] || 0])),
         ...Object.fromEntries(CREDIT_TYPES.map((ct) => [`${ct} (nombre)`, creditCountParType[ct] || 0])),
         "Total crédits (montant €)": creditTotal,
-        "Objectif crédits": objC,
-        "Montant vendu (journal assurances)": montantTotal,
+        "Total crédits (nombre)": creditCountTotal,
+        "Objectif crédits (nombre)": objC,
         "Objectif montant (€)": objM,
-        "Dossiers déclarés (journal)": declared.length,
+        "Dossiers déclarés en instance (journal, non validés)": declared.length,
       };
     });
     const ws = XLSX.utils.json_to_sheet(rows);

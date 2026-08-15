@@ -139,8 +139,11 @@ L'onglet **Journal** offre une vue structurée des ventes, jour par jour (au lie
 Le récapitulatif de chaque jour reprend la présentation du tableau papier utilisé par l'équipe : une grille de puces responsive avec une puce par produit (ALLIN, DIMC, DIM pour les assurances ; PAT, OCA, BPR, MP7, AUG, DIM pour les crédits — PAT et BPR scindés en Papier/eDirect), plutôt qu'un simple total. Zone teal = assurances (nombre), zone ambre = crédits (montant) ; les puces sans activité s'effacent visuellement (fond neutre, tiret) pour que l'œil aille directement à ce qui bouge. Pour les crédits, le nombre de dossiers en instance pour ce type est indiqué entre parenthèses juste devant le nom du produit (ex. « (1) PAT »). La grille s'adapte à toutes les largeurs d'écran, sans défilement horizontal.
 
 Ce même récapitulatif du jour (composant `RecapGrid`, section Assurances optionnelle via une prop `showAssurance`) apparaît aussi :
-- dans **Ma saisie**, sous "Mes ventes du jour" — Assurances et crédits (ces derniers renommés **« Vente en instance »**) ;
-- dans **Suivi & objectifs**, sur la carte d'un collaborateur pour son propre profil (Assurances + Crédits financés) — absent en revanche de la vue responsable, qui reste centrée sur les chiffres-clés et le graphique de performance (voir plus bas).
+- dans **Ma saisie**, sous "Mes ventes du jour" ;
+- dans **Journal**, pour le récapitulatif de chaque jour ;
+- dans **Suivi & objectifs**, sur la carte d'un collaborateur pour son propre profil — absent en revanche de la vue responsable, qui reste centrée sur les chiffres-clés et le graphique de performance (voir plus bas).
+
+Dans les trois cas, les chiffres viennent des ventes **auto-déclarées par le collaborateur** (`entries`), pas encore validées par le responsable — le titre de la section crédits est donc **« Crédits en instance »**, à ne pas confondre avec les **crédits financés** (validés par le responsable, voir section suivante), affichés séparément.
 
 ## Crédits financés — saisie quotidienne du responsable
 
@@ -161,7 +164,7 @@ Chaque collaborateur protège son profil par un mot de passe personnel (6 caract
 
 **En cas d'oubli** : le responsable réinitialise le mot de passe d'un collaborateur depuis l'onglet **Équipe** (icône clé à côté de son nom), après avoir saisi le code d'accès responsable. Cette réinitialisation **supprime** simplement le mot de passe existant côté serveur — elle ne touche à aucune autre donnée du collaborateur (ventes déclarées, objectifs, crédits financés, historique). À sa prochaine tentative de connexion, l'application détecte l'absence de mot de passe et invite directement le collaborateur à en créer un nouveau, sans intervention supplémentaire du responsable.
 
-⚠️ Comme pour `APP_SECRET` (voir "Sécurité" ci-dessous), cette protection reste proportionnée au modèle de confiance de l'application : `APP_SECRET` étant public dans le bundle JS, quelqu'un de déterminé pourrait théoriquement appeler `/api/set-password` directement s'il connaît à la fois l'`id` interne d'un compte et une fenêtre où ce compte n'a *pas encore* de mot de passe (juste après une invitation ou une réinitialisation, avant que la personne concernée ne s'en crée un). Ce n'est pas une authentification à l'épreuve d'un attaquant motivé, mais ça ferme la faille pratique visée : un collègue qui se connecte au profil d'un autre en tapant simplement son nom et son e-mail.
+⚠️ Cette protection reste proportionnée au modèle de confiance de l'application : quelqu'un qui possède déjà un jeton de session valide (voir "Sécurité" ci-dessous) et connaît à la fois l'`id` interne d'un compte et une fenêtre où ce compte n'a *pas encore* de mot de passe (juste après une invitation ou une réinitialisation, avant que la personne concernée ne s'en crée un) pourrait théoriquement appeler `/api/set-password` directement. Ce n'est pas une authentification à l'épreuve d'un attaquant motivé déjà à l'intérieur du site, mais ça ferme la faille pratique visée : un collègue qui se connecte au profil d'un autre en tapant simplement son nom et son e-mail.
 
 ## Invitation des collaborateurs
 
