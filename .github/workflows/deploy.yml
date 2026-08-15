@@ -26,13 +26,27 @@ jobs:
       - name: Build du frontend
         run: npm run build
 
-      # Publie le Worker + les assets statiques (dist/). Ne touche jamais
-      # aux secrets (SITE_ACCESS_CODE, MANAGER_CODE, SESSION_SECRET) :
-      # ceux-ci restent tels que définis via `wrangler secret put` ou le
-      # dashboard Cloudflare, un déploiement ne les réinitialise pas.
+      # Publie le Worker + les assets statiques (dist/).
       - name: Déployer le Worker
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
+
+      # Applique les 3 secrets via la CLI (wrangler secret put), la seule
+      # méthode fiable constatée sur ce projet — le dashboard Cloudflare
+      # ("Variables et secrets") ne les liait pas au Worker lors des
+      # déploiements Git-connectés (bindings "Vars:" absents des logs,
+      # déjà rencontré avec l'ancien APP_SECRET). Les valeurs vivent ici
+      # comme secrets GitHub (chiffrés, jamais affichés dans les logs) —
+      # à définir une seule fois dans Settings > Secrets and variables >
+      # Actions du dépôt : SITE_ACCESS_CODE, MANAGER_CODE, SESSION_SECRET.
+      - name: Appliquer les secrets du Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          echo "${{ secrets.SITE_ACCESS_CODE }}" | npx wrangler secret put SITE_ACCESS_CODE
+          echo "${{ secrets.MANAGER_CODE }}" | npx wrangler secret put MANAGER_CODE
+          echo "${{ secrets.SESSION_SECRET }}" | npx wrangler secret put SESSION_SECRET
