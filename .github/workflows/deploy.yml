@@ -7,6 +7,7 @@ name: Déployer sur Cloudflare Workers
 on:
   push:
     branches:
+      - main
       - claude/rendle-projet-fonctionnel-7x691w
   workflow_dispatch:
 
