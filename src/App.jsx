@@ -1962,7 +1962,7 @@ function SaisieTab({ session, entries, setEntries, recordDeletion, mKey, notify,
           {showTodaySales && (
             <>
               <div className="mb-4">
-                <RecapGrid entries={todayEntries} showAssurance creditTitle="Vente en instance" />
+                <RecapGrid entries={todayEntries} showAssurance />
               </div>
               {todayEntries.length === 0 ? (
                 <p className="text-sm py-6 text-center" style={{ color: THEME.navySoft }}>
@@ -2163,7 +2163,14 @@ function JournalTab({ session, entries, setEntries, recordDeletion, isManager, m
 // s'adapte à toutes les largeurs d'écran). Les puces sans activité
 // s'effacent visuellement (fond neutre, valeur en tiret) pour que l'œil
 // aille droit à ce qui bouge.
-function RecapGrid({ entries, showAssurance = true, creditTitle = "Crédits financés" }) {
+// `creditTitle` par défaut à "Crédits en instance" (pas "Crédits financés") :
+// les 3 usages de ce composant reçoivent tous des `entries` auto-déclarées
+// par le collaborateur (Ma saisie, Journal, récapitulatif du jour), jamais
+// les `creditRecords` validés par le responsable — appeler ça "financés"
+// laissait croire, en particulier côté responsable dans le Journal, que ces
+// chiffres étaient déjà officiels alors qu'ils restent à valider (voir
+// README > Crédits financés — saisie quotidienne du responsable).
+function RecapGrid({ entries, showAssurance = true, creditTitle = "Crédits en instance" }) {
   const breakdown = entriesBreakdown(entries);
   const assuranceChips = ASSURANCE_TYPES.map((at) => ({ key: at, label: at, value: breakdown.assurance[at], format: (v) => v }));
   const creditChips = CREDIT_TYPES.flatMap((ct) =>
