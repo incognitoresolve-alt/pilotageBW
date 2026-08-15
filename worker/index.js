@@ -181,6 +181,27 @@ function jsonResponse(body, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
+// --- Sauvegardes automatiques -----------------------------------------
+// À chaque écriture réussie sur une collection partagée (members, entries,
+// creditRecords...), une copie horodatée est conservée sous une clé
+// séparée — ce que le responsable saisit (en particulier les crédits
+// financés du jour) ne dépend ainsi jamais uniquement de la dernière
+// écriture : un bug applicatif, une fausse manœuvre ou une écriture
+// malencontreuse peuvent être rattrapés en restaurant une sauvegarde
+// récente (voir App.jsx > panneau "Sauvegardes"). `expirationTtl` fait
+// expirer chaque sauvegarde automatiquement après la fenêtre de
+// rétention — pas de purge manuelle à prévoir.
+const BACKUP_RETENTION_SECONDS = 60 * 24 * 60 * 60; // 60 jours
+async function writeBackup(env, key, value) {
+  // "memberSecrets" ne passe jamais par cette route (voir plus haut) donc
+  // n'est jamais sauvegardé ici — mais la garde reste utile si ce filet
+  // de sécurité était un jour réutilisé ailleurs.
+  if (key === "memberSecrets") return;
+  await env.STORAGE_KV.put(`backup:${key}:${Date.now()}`, value, {
+    expirationTtl: BACKUP_RETENTION_SECONDS,
+  });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -266,13 +287,40 @@ async function handleApi(request, env, url) {
             }
             const nextVersion = currentVersion + 1;
             await env.STORAGE_KV.put(key, body.value, { metadata: { version: nextVersion } });
+            await writeBackup(env, key, body.value);
             return jsonResponse({ version: nextVersion }, 200);
           }
           await env.STORAGE_KV.put(key, body.value, { metadata: { version: Date.now() } });
+          await writeBackup(env, key, body.value);
           return new Response(null, { status: 204 });
         }
 
         return new Response("Method not allowed", { status: 405 });
+      }
+
+      // Historique des sauvegardes automatiques d'une collection — voir
+      // writeBackup. Liste (dates disponibles) et lecture d'une sauvegarde
+      // précise, pour un rétablissement manuel depuis l'application (voir
+      // App.jsx > panneau "Sauvegardes") sans jamais passer par la route
+      // générique /api/storage/:key (qui écraserait la donnée actuelle).
+      const backupListMatch = url.pathname.match(/^\/api\/backups\/([^/]+)$/);
+      if (backupListMatch && request.method === "GET") {
+        const key = decodeURIComponent(backupListMatch[1]);
+        const list = await env.STORAGE_KV.list({ prefix: `backup:${key}:` });
+        const timestamps = list.keys
+          .map((k) => Number(k.name.slice(`backup:${key}:`.length)))
+          .filter((t) => Number.isFinite(t))
+          .sort((a, b) => b - a);
+        return jsonResponse({ timestamps });
+      }
+
+      const backupReadMatch = url.pathname.match(/^\/api\/backups\/([^/]+)\/(\d+)$/);
+      if (backupReadMatch && request.method === "GET") {
+        const key = decodeURIComponent(backupReadMatch[1]);
+        const timestamp = backupReadMatch[2];
+        const value = await env.STORAGE_KV.get(`backup:${key}:${timestamp}`);
+        if (value === null) return new Response(null, { status: 404 });
+        return jsonResponse({ value });
       }
 
       // Vérifie le code d'accès responsable côté serveur : sa vraie

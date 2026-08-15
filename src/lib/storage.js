@@ -199,3 +199,33 @@ export async function resetMemberPassword(memberId, managerCode) {
   const res = await apiPost("/api/reset-password", { memberId, managerCode });
   if (!res.ok) throw new Error(await describeApiFailure(res));
 }
+
+// --- Sauvegardes automatiques ----------------------------------------------
+// Chaque écriture sur une collection partagée (members, entries,
+// creditRecords...) en conserve une copie horodatée côté Worker, conservée
+// 60 jours — voir worker/index.js > writeBackup. Ces deux fonctions
+// permettent de lister les sauvegardes disponibles pour une collection et
+// d'en récupérer une précise, pour un rétablissement manuel (voir App.jsx
+// > panneau "Sauvegardes").
+
+// Renvoie la liste des horodatages (ms epoch) des sauvegardes disponibles
+// pour cette collection, du plus récent au plus ancien.
+export async function listBackups(key) {
+  const res = await fetch(`/api/backups/${encodeURIComponent(key)}`, {
+    headers: sessionHeaders(),
+  });
+  if (!res.ok) throw new Error(`GET backups ${key} failed: ${await describeFailure(res)}`);
+  const body = await res.json();
+  return body.timestamps || [];
+}
+
+// Récupère le contenu (déjà parsé) d'une sauvegarde précise.
+export async function getBackup(key, timestamp) {
+  const res = await fetch(`/api/backups/${encodeURIComponent(key)}/${timestamp}`, {
+    headers: sessionHeaders(),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`GET backup ${key}/${timestamp} failed: ${await describeFailure(res)}`);
+  const body = await res.json();
+  return JSON.parse(body.value);
+}

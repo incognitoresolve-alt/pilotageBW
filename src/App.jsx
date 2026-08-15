@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Shield, CreditCard, Users, LogOut, Plus, Trash2, CheckCircle2,
   Calendar, Settings, ChevronRight, ChevronLeft, Lock, TrendingUp, ClipboardList,
@@ -9,6 +9,7 @@ import * as XLSX from "xlsx";
 import {
   verifyManagerCode, loginMember, setMemberPassword, resetMemberPassword,
   hasSiteToken, unlockSite, clearSiteToken, isSessionError,
+  listBackups, getBackup,
 } from "./lib/storage";
 
 const PASSWORD_MIN_LEN = 6;
@@ -419,9 +420,15 @@ export default function App() {
 
   const mKey = monthKey();
 
+  // Annule le minuteur de disparition précédent avant d'en poser un
+  // nouveau : sans ça, deux notify() rapprochés (ex. deux actions
+  // enchaînées en moins de 2,6 s) font disparaître le second toast
+  // prématurément quand le minuteur du premier se déclenche.
+  const toastTimerRef = useRef(null);
   const notify = useCallback((msg, isError = false) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast({ msg, isError });
-    setTimeout(() => setToast(null), 2600);
+    toastTimerRef.current = setTimeout(() => setToast(null), 2600);
   }, []);
 
   useEffect(() => {
@@ -1570,6 +1577,11 @@ function MainApp({ session, onLogout, members, setMembers, entries, setEntries, 
             notify={notify}
             invites={invites}
             setInvites={setInvites}
+            entries={entries}
+            creditRecords={creditRecords}
+            setCreditRecords={setCreditRecords}
+            figures={figures}
+            deletionHistory={deletionHistory}
           />
         )}
         {tab === "historique" && isManager && (
@@ -3952,7 +3964,10 @@ function ClassementTab({ members, entries, figures, creditRecords, mKey }) {
 }
 
 /* ---------------- EQUIPE TAB (manager only) ---------------- */
-function EquipeTab({ members, setMembers, recordDeletion, session, notify, invites, setInvites }) {
+function EquipeTab({
+  members, setMembers, recordDeletion, session, notify, invites, setInvites,
+  entries, creditRecords, setCreditRecords, figures, deletionHistory,
+}) {
   const collaborators = members.filter((m) => m.role === "collaborateur");
   const managers = members.filter((m) => m.role === "responsable");
   const pendingInvites = invites.filter((i) => !i.used);
@@ -3962,6 +3977,61 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
   const [inviteError, setInviteError] = useState("");
   const [copiedId, setCopiedId] = useState(null);
   const [inviteBusy, setInviteBusy] = useState(false);
+
+  // Sauvegardes automatiques des crédits financés (une par écriture, voir
+  // worker/index.js > writeBackup) — chargées une fois à l'ouverture de
+  // l'onglet, pour un rétablissement manuel en cas de fausse manœuvre.
+  const [creditBackups, setCreditBackups] = useState([]);
+  const [backupsLoading, setBackupsLoading] = useState(true);
+  const [restoringTs, setRestoringTs] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listBackups("creditRecords")
+      .then((timestamps) => { if (!cancelled) setCreditBackups(timestamps); })
+      .catch(() => { if (!cancelled) setCreditBackups([]); })
+      .finally(() => { if (!cancelled) setBackupsLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const downloadFullBackup = () => {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      members,
+      entries,
+      creditRecords,
+      figures,
+      deletionHistory,
+      invites,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `suivi-commercial-sauvegarde-${todayISO()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    notify("Sauvegarde téléchargée.");
+  };
+
+  const restoreCreditBackup = async (ts) => {
+    setRestoringTs(ts);
+    try {
+      const data = await getBackup("creditRecords", ts);
+      if (data === null) {
+        notify("Cette sauvegarde n'existe plus (expirée).", true);
+        return;
+      }
+      const ok = await setCreditRecords(data);
+      if (ok) {
+        notify(`Crédits financés restaurés depuis la sauvegarde du ${new Date(ts).toLocaleString("fr-FR")}.`);
+      }
+    } catch (e) {
+      notify(`Restauration impossible (${e.message}).`, true);
+    } finally {
+      setRestoringTs(null);
+    }
+  };
 
   const removeMember = async (id) => {
     const member = members.find((m) => m.id === id);
@@ -4149,6 +4219,61 @@ function EquipeTab({ members, setMembers, recordDeletion, session, notify, invit
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="rounded-2xl p-5" style={{ background: THEME.card, border: `1px solid ${THEME.line}` }}>
+        <h2 className="text-sm font-semibold mb-1 flex items-center gap-1.5">
+          <History size={15} style={{ color: MANAGER_ACCENT }} /> Sauvegardes
+        </h2>
+        <p className="text-xs mb-4" style={{ color: THEME.navySoft }}>
+          Chaque enregistrement (crédits financés, objectifs, ventes...) est automatiquement conservé côté serveur pendant 60 jours — rien ne dépend d'une seule écriture. Vous pouvez aussi télécharger vous-même une copie complète à tout moment.
+        </p>
+
+        <button
+          onClick={downloadFullBackup}
+          className="sc-btn flex items-center gap-1.5 text-xs font-semibold px-3.5 py-2.5 rounded-lg text-white mb-5"
+          style={{ background: MANAGER_ACCENT }}
+        >
+          <Download size={14} /> Télécharger une sauvegarde complète (.json)
+        </button>
+
+        <div className="text-xs font-semibold mb-2" style={{ color: THEME.navySoft }}>
+          Historique automatique — Crédits financés
+        </div>
+        {backupsLoading ? (
+          <p className="text-sm py-3 flex items-center gap-1.5" style={{ color: THEME.navySoft }}>
+            <Loader2 size={14} className="animate-spin" /> Chargement…
+          </p>
+        ) : creditBackups.length === 0 ? (
+          <p className="text-sm py-3" style={{ color: THEME.navySoft }}>
+            Aucune sauvegarde pour l'instant — la première apparaîtra dès le prochain enregistrement de crédits.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {creditBackups.slice(0, 20).map((ts) => (
+              <div
+                key={ts}
+                className="flex items-center justify-between px-3 py-2 rounded-lg text-sm gap-2"
+                style={{ background: THEME.bg }}
+              >
+                <span style={{ color: THEME.navySoft }}>{new Date(ts).toLocaleString("fr-FR")}</span>
+                <ConfirmActionButton
+                  onConfirm={() => restoreCreditBackup(ts)}
+                  label={restoringTs === ts ? "Restauration…" : "Restaurer"}
+                  icon={RotateCcw}
+                  color={MANAGER_ACCENT}
+                  iconOnly={false}
+                  disabled={restoringTs !== null}
+                />
+              </div>
+            ))}
+            {creditBackups.length > 20 && (
+              <p className="text-xs pt-1" style={{ color: THEME.navySoft }}>
+                {creditBackups.length - 20} sauvegarde(s) plus ancienne(s) non affichée(s) (toujours conservées 60 jours).
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <p className="text-xs flex items-center gap-1.5" style={{ color: THEME.navySoft }}>
